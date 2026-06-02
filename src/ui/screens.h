@@ -25,12 +25,9 @@ extern objects_t objects;
 
 typedef struct {
     lv_meter_scale_t *scale;
-    lv_meter_scale_t *scale1;
-    lv_meter_scale_t *scale2;
     lv_meter_indicator_t *indicator;
     lv_meter_indicator_t *indicator1;
     lv_meter_indicator_t *indicator2;
-    lv_meter_indicator_t *indicator3;
 } screen_main_state_t;
 
 extern screen_main_state_t screen_main_state;

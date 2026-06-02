@@ -9,7 +9,7 @@
 // === Anti-tearing VSYNC ===
 //  1 = synchro VSYNC : pas de tearing mais ~15 FPS (attente du balayage)
 //  0 = pas de synchro : ~30-50 FPS mais léger tearing sur aiguille rapide
-#define LVGL_ANTITEAR_VSYNC 1
+#define LVGL_ANTITEAR_VSYNC 0
 
 // Sémaphores anti-tearing (définis dans Display_ST7701.cpp)
 extern SemaphoreHandle_t sem_vsync_end;

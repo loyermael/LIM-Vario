@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>L!M Vario — Simulateur</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0d0d0d;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      font-family: Arial, sans-serif;
+    }
+    h1 { font-size: 13px; letter-spacing: 3px; text-transform: uppercase;
+         margin-bottom: 16px; color: #444; }
+    canvas { border-radius: 50%; box-shadow: 0 0 40px rgba(50,150,255,0.1),
+             0 0 3px rgba(255,255,255,0.15); }
+    .info { margin-top: 12px; font-size: 11px; color: #333; letter-spacing: 1px; }
+  </style>
+</head>
+<body>
+<h1>L!M Vario · Simulateur</h1>
+<canvas id="c" width="480" height="480"></canvas>
+<div class="info" id="sc">—</div>
+
+<script>
+const cv  = document.getElementById('c');
+const ctx = cv.getContext('2d');
+const CX = 240, CY = 240;
+
+// ── Convention angles ─────────────────────────────────────────
+// v=-5 → canvas 55° (bas-droite ~5h)
+// v= 0 → canvas 180° (gauche = 9h) ← zéro à gauche ✓
+// v=+5 → canvas 305° (haut-droite ~1h)
+// Gap de 110° sur la droite (entre 305° et 55°)
+function valToRad(v) {
+  v = Math.max(-5, Math.min(5, v));
+  return (55 + (v + 5) * 25) * Math.PI / 180;
+}
+
+// ── Simulation ─────────────────────────────────────────────────
+let t = 0, scenarioIdx = 0, scenarioT = 0;
+let vario = 0, avgVario = 0, varioTarget = 0;
+let altitude = 1240, ias = 95, mc = 1.5;
+
+const SCENARIOS = [
+  { name: '⬆ Thermique',  dur: 22, vBase:  2.8, noise: 1.2, ias: 82  },
+  { name: '→ Transition', dur: 14, vBase: -1.6, noise: 0.4, ias: 118 },
+  { name: '— Vol plat',   dur: 10, vBase: -0.3, noise: 0.2, ias: 95  },
+];
+
+function updateData() {
+  const dt = 0.016;
+  t += dt; scenarioT += dt;
+  const sc = SCENARIOS[scenarioIdx];
+  if (scenarioT > sc.dur) {
+    scenarioIdx = (scenarioIdx + 1) % SCENARIOS.length;
+    scenarioT = 0;
+  }
+  varioTarget = Math.max(-5, Math.min(5,
+    sc.vBase + Math.sin(t*1.1)*sc.noise + Math.sin(t*3.7)*0.18));
+  vario    += (varioTarget - vario)  * 0.10;
+  avgVario += (vario - avgVario)     * 0.006;
+  altitude += vario * dt * 10;
+  altitude  = Math.max(300, Math.min(2800, altitude));
+  ias      += (sc.ias - ias) * 0.015;
+  mc        = 1.5 + Math.sin(t * 0.04) * 0.6;
+  document.getElementById('sc').textContent =
+    sc.name + '  ·  vario ' + (vario >= 0 ? '+' : '') + vario.toFixed(2) + ' m/s';
+}
+
+// ── Fond noir ──────────────────────────────────────────────────
+function drawBg() {
+  ctx.fillStyle = '#000';
+  ctx.beginPath();
+  ctx.arc(CX, CY, 239, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// ── Arc blanc extérieur (bande de graduation) ─────────────────
+const R_ARC  = 205;   // rayon centre de l'arc
+const W_ARC  = 58;    // largeur de la bande blanche
+const A_START = 55  * Math.PI / 180;   // début v=-5
+const A_END   = 305 * Math.PI / 180;   // fin   v=+5
+
+function drawWhiteArc() {
+  ctx.lineWidth   = W_ARC;
+  ctx.lineCap     = 'round';           // ← extrémités arrondies
+  ctx.strokeStyle = '#FFFFFF';
+  ctx.beginPath();
+  ctx.arc(CX, CY, R_ARC, A_START, A_END, false);  // sens horaire = 250°
+  ctx.stroke();
+}
+
+// ── Arc coloré dynamique ──────────────────────────────────────
+function drawColorArc() {
+  if (Math.abs(vario) < 0.12) return;
+  const zRad = valToRad(0);
+  const vRad = valToRad(vario);
+  const up   = vario > 0;
+  ctx.lineWidth   = W_ARC * 0.55;
+  ctx.lineCap     = 'round';
+  ctx.strokeStyle = up ? 'rgba(50,210,50,0.65)' : 'rgba(220,50,50,0.65)';
+  ctx.beginPath();
+  if (up) ctx.arc(CX, CY, R_ARC, zRad, vRad, false);
+  else    ctx.arc(CX, CY, R_ARC, vRad, zRad, false);
+  ctx.stroke();
+}
+
+// ── Ticks ─────────────────────────────────────────────────────
+function drawScale() {
+  const R_OUT = 232;
+  for (let v = -5; v <= 5; v += 0.5) {
+    const major = Math.abs(Math.round(v) - v) < 0.01;
+    const zero  = Math.abs(v) < 0.01;
+    const rad   = valToRad(v);
+    const c = Math.cos(rad), s = Math.sin(rad);
+    const len = zero ? 22 : (major ? 14 : 8);
+    ctx.strokeStyle = major ? '#111' : '#444';
+    ctx.lineWidth   = zero ? 3.5 : (major ? 2.5 : 1.5);
+    ctx.lineCap     = 'round';
+    ctx.beginPath();
+    ctx.moveTo(CX + R_OUT * c,       CY + R_OUT * s);
+    ctx.lineTo(CX + (R_OUT-len) * c, CY + (R_OUT-len) * s);
+    ctx.stroke();
+  }
+
+  // Labels (valeur absolue — pas de signe moins)
+  const R_LBL = 162;
+  for (let v = -5; v <= 5; v++) {
+    const rad = valToRad(v);
+    const c = Math.cos(rad), s = Math.sin(rad);
+    ctx.fillStyle    = v === 0 ? '#FFF' : '#BBBBBB';
+    ctx.font         = `bold ${v === 0 ? 28 : 22}px Arial`;
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(Math.abs(v), CX + R_LBL * c, CY + R_LBL * s);
+  }
+
+  // Unité m/s
+  ctx.fillStyle = '#444';
+  ctx.font = '13px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText('m/s', CX, CY + 175);
+}
+
+// ── Aiguille pointée ──────────────────────────────────────────
+function drawNeedle(v, color, length, baseW, glowColor) {
+  const angle = valToRad(v);
+  const c = Math.cos(angle), s = Math.sin(angle);
+  const tipX = CX + length * c, tipY = CY + length * s;
+  const px = -s * baseW,        py =  c * baseW;
+
+  if (glowColor) {
+    ctx.shadowBlur  = 14;
+    ctx.shadowColor = glowColor;
+  }
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(CX + px, CY + py);
+  ctx.lineTo(CX - px, CY - py);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+// ── Marqueur MacCready ────────────────────────────────────────
+function drawMC() {
+  const angle = valToRad(Math.max(-5, Math.min(5, mc)));
+  const c = Math.cos(angle), s = Math.sin(angle);
+  ctx.strokeStyle = '#FF3333';
+  ctx.lineWidth   = 4;
+  ctx.lineCap     = 'butt';
+  ctx.beginPath();
+  ctx.moveTo(CX + 218*c, CY + 218*s);
+  ctx.lineTo(CX + 232*c, CY + 232*s);
+  ctx.stroke();
+}
+
+// ── Textes ────────────────────────────────────────────────────
+function drawInfo() {
+  ctx.textAlign    = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Altitude
+  ctx.fillStyle = '#FFF'; ctx.font = 'bold 32px Arial';
+  ctx.fillText(Math.round(altitude) + ' m', CX, 72);
+  ctx.fillStyle = '#444'; ctx.font = '12px Arial';
+  ctx.fillText('ALT BARO', CX, 91);
+
+  // Vario numérique
+  const vc = vario > 0.2 ? '#32CD32' : vario < -0.2 ? '#FF5555' : '#AAA';
+  const vs = (vario >= 0 ? '+' : '') + vario.toFixed(1);
+  ctx.fillStyle = vc; ctx.font = 'bold 36px monospace';
+  ctx.fillText(vs, CX, CY + 78);
+
+  // Vario moyen
+  const ac = avgVario > 0.1 ? '#66DD66' : avgVario < -0.1 ? '#FF9999' : '#666';
+  ctx.fillStyle = ac; ctx.font = '16px Arial';
+  ctx.fillText('∅ ' + (avgVario >= 0 ? '+' : '') + avgVario.toFixed(1) + ' m/s', CX, CY + 106);
+
+  // IAS
+  ctx.fillStyle = '#00BFFF'; ctx.font = 'bold 28px Arial';
+  ctx.fillText(Math.round(ias), CX - 100, 385);
+  ctx.fillStyle = '#444'; ctx.font = '11px Arial';
+  ctx.fillText('IAS km/h', CX - 100, 403);
+
+  // MC
+  ctx.fillStyle = '#FF6666'; ctx.font = '11px Arial';
+  ctx.fillText('MC', CX + 100, 374);
+  ctx.font = 'bold 24px Arial';
+  ctx.fillText(mc.toFixed(1), CX + 100, 393);
+  ctx.fillStyle = '#AA3333'; ctx.font = '11px Arial';
+  ctx.fillText('m/s', CX + 100, 410);
+}
+
+// ── Centre ────────────────────────────────────────────────────
+function drawCenter() {
+  ctx.fillStyle = '#111';
+  ctx.beginPath(); ctx.arc(CX, CY, 20, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#2a2a2a';
+  ctx.beginPath(); ctx.arc(CX, CY, 9, 0, Math.PI*2); ctx.fill();
+}
+
+// ── Boucle principale ─────────────────────────────────────────
+function frame() {
+  updateData();
+  ctx.clearRect(0, 0, 480, 480);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(CX, CY, 239, 0, Math.PI*2);
+  ctx.clip();
+
+  drawBg();
+  drawWhiteArc();
+  drawColorArc();
+  drawScale();
+  drawInfo();
+  drawMC();
+
+  // Aiguille vario moyen (verte, courte)
+  drawNeedle(avgVario, '#32CD32', 148, 3, '#32CD32');
+
+  // Aiguille principale (blanche ou rouge)
+  const col = vario >= 0 ? '#EEEEEE' : '#FF5555';
+  drawNeedle(vario, col, 192, 5.5, col);
+
+  drawCenter();
+  ctx.restore();
+  requestAnimationFrame(frame);
+}
+
+frame();
+</script>
+</body>
+</html>

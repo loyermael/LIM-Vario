@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "author": "Antigravity",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    {
+      "type": "wokwi-ili9341",
+      "id": "tft",
+      "top": 0,
+      "left": 200,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ky-040",
+      "id": "encoder",
+      "top": -80,
+      "left": -130,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-slide-switch",
+      "id": "sw_stf",
+      "top": 150,
+      "left": -130,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-slide-switch",
+      "id": "sw_auto",
+      "top": 250,
+      "left": -130,
+      "attrs": {}
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+
+    [ "esp:23", "tft:MOSI", "green",  [] ],
+    [ "esp:19", "tft:MISO", "blue",   [] ],
+    [ "esp:18", "tft:SCK",  "yellow", [] ],
+    [ "esp:5",  "tft:CS",   "orange", [] ],
+    [ "esp:22", "tft:D/C",  "purple", [] ],
+    [ "esp:21", "tft:RESET","brown",  [] ],
+    [ "esp:3V3","tft:VCC",  "red",    [] ],
+    [ "esp:GND","tft:GND",  "black",  [] ],
+    [ "esp:3V3","tft:LED",  "red",    [] ],
+
+    [ "esp:26", "encoder:CLK", "cyan",    [] ],
+    [ "esp:32", "encoder:DT",  "magenta", [] ],
+    [ "esp:27", "encoder:SW",  "gray",    [] ],
+    [ "esp:GND","encoder:GND", "black",   [] ],
+
+    [ "esp:13", "sw_stf:2",  "green", [] ],
+    [ "esp:GND","sw_stf:1",  "black", [] ],
+
+    [ "esp:33", "sw_auto:2", "green", [] ],
+    [ "esp:GND","sw_auto:1", "black", [] ]
+  ]
+}

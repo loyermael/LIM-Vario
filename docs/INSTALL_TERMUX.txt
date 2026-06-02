@@ -1,0 +1,111 @@
+============================================================
+  INSTALLATION ESP32 VARIO - TERMUX
+  Commandes a copier-coller dans Termux
+============================================================
+
+
+ETAPE 1 - Installer les dependances
+------------------------------------------------------------
+pkg update -y && pkg install -y python termux-api
+
+
+ETAPE 2 - Autoriser l'acces au stockage
+------------------------------------------------------------
+termux-setup-storage
+
+  → Android va demander une autorisation : Autoriser
+
+
+ETAPE 3 - Autorisation GPS (a faire dans les parametres Android)
+------------------------------------------------------------
+  Parametres → Apps → Termux:API → Autorisations
+  → Localisation → Autoriser tout le temps
+
+
+ETAPE 4 - Copier gps_forward.py depuis les Telechargements
+------------------------------------------------------------
+  (Telecharger d'abord depuis Nextcloud sur le tel)
+
+cp ~/storage/downloads/gps_forward.py ~/
+
+
+ETAPE 5 - Creer le dossier Lua de XCSoar
+------------------------------------------------------------
+mkdir -p ~/storage/shared/XCSoarData/lua
+
+
+ETAPE 6 - Copier le script Lua dans XCSoar
+------------------------------------------------------------
+  (Telecharger vario_export.lua depuis Nextcloud sur le tel)
+
+cp ~/storage/downloads/vario_export.lua ~/storage/shared/XCSoarData/lua/
+
+
+ETAPE 7 - Verifier que les fichiers sont bien places
+------------------------------------------------------------
+ls ~/gps_forward.py
+ls ~/storage/shared/XCSoarData/lua/vario_export.lua
+
+
+ETAPE 8 - Lancement
+------------------------------------------------------------
+  1. Connecter le WiFi sur : FV_Displayboard  mdp: 12345678
+  2. Lancer XCSoar (charge le script Lua automatiquement)
+  3. Dans Termux :
+
+python ~/gps_forward.py
+
+
+============================================================
+  RESULTATS ATTENDUS DANS TERMUX
+============================================================
+
+[GPS] Thread demarre
+[XCSoar] Thread demarre - lecture de vario_live.txt
+[TCP] Connexion a l'ESP32 192.168.2.1:4353...
+[TCP] Connecte a l'ESP32 !
+[OK] Vario:+0.0 Vmoy:+0.0 AltBaro:0m AltGPS:856m GS:0km/h Vent:0km/h@0deg
+
+  → Le display sort du mode demo et affiche les donnees
+
+
+============================================================
+  SANS XCSOAR LUA (mode GPS simple)
+============================================================
+
+  Si vario_live.txt introuvable :
+  - Altitude GPS du tel → affichee sur le display
+  - Vario derive de l'altitude GPS (en exterieur)
+  - Vitesse sol depuis GPS
+  → Suffisant pour tester le display en vol
+
+
+============================================================
+  AVEC XCSOAR LUA (mode complet)
+============================================================
+
+  Si XCSoar tourne avec vario_export.lua charge :
+  - Vario total energy (calcule par XCSoar)
+  - Vario moyen 30s
+  - Altitude baro
+  - Vent (direction + force)
+  → Donnees de qualite vol
+
+
+============================================================
+  COMMANDES UTILES
+============================================================
+
+Arreter le script :
+  Ctrl + C
+
+Relancer apres un arret :
+  python ~/gps_forward.py
+
+Verifier le fichier XCSoar en temps reel :
+  watch -n 1 cat /sdcard/XCSoarData/vario_live.txt
+
+Verifier les permissions GPS :
+  termux-location -r once
+
+============================================================

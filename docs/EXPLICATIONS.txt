@@ -1,0 +1,143 @@
+============================================================
+  EXPLICATIONS - SCRIPTS VARIO ESP32
+============================================================
+
+
+------------------------------------------------------------
+  vario_export.lua  (script XCSoar)
+------------------------------------------------------------
+
+ROLE :
+  Tourne en arriere-plan dans XCSoar.
+  Lit les donnees de vol calculees par XCSoar et les ecrit
+  dans un fichier texte sur le telephone.
+
+OU LE METTRE :
+  /sdcard/XCSoarData/lua/vario_export.lua
+  XCSoar charge automatiquement tous les fichiers .lua
+  dans ce dossier au demarrage.
+
+CE QU'IL FAIT :
+  Toutes les secondes, il lit dans XCSoar :
+
+    altitude_baro  → altitude barometrique (m)
+    ground_speed   → vitesse sol (m/s)
+    vario          → vario total energy - filtre par XCSoar (m/s)
+    average_vario  → moyenne du vario sur 30 secondes (m/s)
+    wind_speed     → vitesse du vent (m/s)
+    wind_bearing   → direction d'ou vient le vent (degres)
+
+  Et les ecrit dans ce fichier :
+    /sdcard/XCSoarData/vario_live.txt
+
+  Contenu du fichier exemple :
+    ALT_BARO=856.3
+    GS=0.000
+    VARIO=1.23
+    AVG_VARIO=0.87
+    WIND_SPEED=5.20
+    WIND_BEARING=270.0
+
+POURQUOI UN FICHIER :
+  XCSoar ne peut pas envoyer directement des donnees
+  via le reseau (limitation Android). Le fichier sert de
+  "pont" entre XCSoar et le script Python Termux.
+
+SI LE FICHIER N'EXISTE PAS :
+  XCSoar n'a pas ete redémarre apres avoir installe le Lua,
+  ou le dossier lua/ n'est pas au bon endroit.
+  → Verifier le chemin et redemarrer XCSoar.
+
+
+------------------------------------------------------------
+  gps_forward.py  (script Termux)
+------------------------------------------------------------
+
+ROLE :
+  Recupere les donnees de XCSoar (via le fichier Lua)
+  + la position GPS du telephone (via termux-location)
+  et les envoie a l'ESP32 par WiFi TCP.
+
+COMMENT CA MARCHE :
+
+  3 choses tournent en parallele :
+
+  [Thread GPS]
+    Appelle termux-location toutes les secondes
+    Recupere : latitude, longitude, altitude GPS,
+               vitesse, cap (direction de deplacement)
+
+  [Thread XCSoar]
+    Lit vario_live.txt toutes les 0.5 secondes
+    Recupere : vario, altitude baro, vent, vitesse sol
+
+  [Boucle principale TCP]
+    Se connecte a l'ESP32 (192.168.2.1 port 4353)
+    Envoie chaque seconde :
+
+    $POV,V  → vario total energy (depuis XCSoar)
+    $POV,S  → vario moyen 30s   (depuis XCSoar)
+    $POV,E  → altitude baro     (depuis XCSoar)
+    $PLXVC  → vent dir + force  (depuis XCSoar)
+    $GPRMC  → position + vitesse sol (depuis GPS tel)
+    $GPGGA  → altitude GPS      (depuis GPS tel)
+
+CE QUI S'AFFICHE SUR LE DISPLAY SELON LA SITUATION :
+
+  SANS Lua XCSoar (fichier introuvable) :
+    Vario    → derive de l'altitude GPS (bruite, OK en vol)
+    Altitude → altitude GPS du telephone
+    Vitesse  → GPS telephone
+    Vent     → 0 (pas de donnee)
+
+  AVEC Lua XCSoar (fichier present) :
+    Vario    → calcule par XCSoar (filtre, MacCready)
+    Altitude → altitude baro XCSoar
+    Vitesse  → XCSoar
+    Vent     → XCSoar (direction + force)
+
+EN CAS DE DECONNEXION :
+  Le script reconnecte automatiquement toutes les 3 secondes.
+  Pas besoin de relancer.
+
+COMMENT L'ARRETER :
+  Ctrl + C dans Termux
+
+
+------------------------------------------------------------
+  SCHEMA GLOBAL
+------------------------------------------------------------
+
+  [GPS Telephone]
+       |
+       | (termux-location)
+       v
+  [gps_forward.py]  <---  [vario_live.txt]  <---  [vario_export.lua]
+       |                                                   |
+       | (TCP WiFi)                               (XCSoar blackboard)
+       v                                                   ^
+  [ESP32 Vario]                                     [XCSoar calcule]
+  Affiche :
+    - Vario
+    - Altitude
+    - Vitesse sol
+    - Vent
+    - Cap
+
+
+------------------------------------------------------------
+  FICHIERS ET EMPLACEMENTS
+------------------------------------------------------------
+
+Sur le PC (Nextcloud) :
+  L!M Vario/gps_forward.py
+  L!M Vario/xcsoar_lua/vario_export.lua
+  L!M Vario/INSTALL_TERMUX.txt
+  L!M Vario/EXPLICATIONS.txt  (ce fichier)
+
+Sur le telephone :
+  /sdcard/XCSoarData/lua/vario_export.lua   (pour XCSoar)
+  ~/gps_forward.py                           (pour Termux)
+  /sdcard/XCSoarData/vario_live.txt          (cree automatiquement)
+
+============================================================

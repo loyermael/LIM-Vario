@@ -131,7 +131,7 @@ void setup()
 
   Serial.println(">> Encoder_MC_Init"); Encoder_MC_Init();
   // Tache rapide de lecture encodeur (core 0, toutes les 2 ms)
-  xTaskCreatePinnedToCore(Encoder_Task, "encoder", 2048, NULL, 4, NULL, 0);
+  xTaskCreatePinnedToCore(Encoder_Task, "encoder", 8192, NULL, 4, NULL, 0);
 
   Serial.println(">> setup TERMINE OK");
 }

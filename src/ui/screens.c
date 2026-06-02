@@ -42,53 +42,33 @@ void create_screen_main() {
         lv_obj_t *parent_obj = obj;
         {
             lv_obj_t *obj = lv_meter_create(parent_obj);
-            objects.obj0 = obj;
+            objects.obj1 = obj;
             lv_obj_set_pos(obj, -20, -20);
             lv_obj_set_size(obj, 520, 520);
             {
                 lv_meter_scale_t *scale = lv_meter_add_scale(obj);
                 state->scale = scale;
-                lv_meter_set_scale_ticks(obj, scale, 11, 1, 0, lv_color_hex(0x666666));
-                lv_meter_set_scale_major_ticks(obj, scale, 2, 7, 18, lv_color_hex(0x212121), 25);
-                lv_meter_set_scale_range(obj, scale, 5, 0, 125, 55);
-            }
-            {
-                lv_meter_scale_t *scale = lv_meter_add_scale(obj);
-                state->scale1 = scale;
-                lv_meter_set_scale_ticks(obj, scale, 11, 1, 0, lv_color_hex(0x666666));
-                lv_meter_set_scale_major_ticks(obj, scale, 2, 7, 18, lv_color_hex(0x212121), 25);
-                lv_meter_set_scale_range(obj, scale, 0, 5, 125, 180);
-            }
-            {
-                lv_meter_scale_t *scale = lv_meter_add_scale(obj);
-                state->scale2 = scale;
                 lv_meter_set_scale_ticks(obj, scale, 2, 0, 0, lv_color_hex(0x000000));
                 lv_meter_set_scale_major_ticks(obj, scale, 99999, 0, 0, lv_color_hex(0x000000), -500);
                 lv_meter_set_scale_range(obj, scale, -5000, 5000, 250, 55);
                 {
-                    lv_meter_indicator_t *indicator = lv_meter_add_arc(obj, scale, 70, lv_color_hex(0xffffff), 0);
-                    state->indicator = indicator;
-                    lv_meter_set_indicator_start_value(obj, indicator, -4970);
-                    lv_meter_set_indicator_end_value(obj, indicator, 4970);
+                    state->indicator = lv_meter_add_needle_img(obj, scale, &img_needle_main, -35, 10);
                 }
                 {
-                    state->indicator1 = lv_meter_add_needle_img(obj, scale, &img_arrow_mc, -215, 15);
+                    state->indicator1 = lv_meter_add_needle_img(obj, scale, &img_arrow_mc, -211, 15);
                 }
                 {
-                    state->indicator2 = lv_meter_add_needle_img(obj, scale, &img_arrow_thermal, -170, 15);
-                }
-                {
-                    state->indicator3 = lv_meter_add_needle_img(obj, scale, &img_needle_main, -35, 10);
+                    state->indicator2 = lv_meter_add_needle_img(obj, scale, &img_arrow_thermal, -173, 15);
                 }
             }
             lv_obj_clear_flag(obj, LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_SCROLL_CHAIN_HOR|LV_OBJ_FLAG_SCROLL_CHAIN_VER|LV_OBJ_FLAG_SCROLL_ELASTIC|LV_OBJ_FLAG_SCROLL_MOMENTUM|LV_OBJ_FLAG_SCROLL_WITH_ARROW);
-            lv_obj_set_style_bg_color(obj, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_text_font(obj, &lv_font_montserrat_32, LV_PART_TICKS | LV_STATE_DEFAULT);
             lv_obj_set_style_arc_rounded(obj, true, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_img_src(obj, &img_vario_backgrounf, LV_PART_MAIN | LV_STATE_DEFAULT);
         }
         {
             lv_obj_t *obj = lv_obj_create(parent_obj);
-            objects.obj1 = obj;
+            objects.obj0 = obj;
             lv_obj_set_pos(obj, 68, 68);
             lv_obj_set_size(obj, 345, 345);
             lv_obj_clear_flag(obj, LV_OBJ_FLAG_CLICKABLE|LV_OBJ_FLAG_SCROLLABLE|LV_OBJ_FLAG_SCROLL_CHAIN_HOR|LV_OBJ_FLAG_SCROLL_CHAIN_VER|LV_OBJ_FLAG_SCROLL_ELASTIC|LV_OBJ_FLAG_SCROLL_MOMENTUM|LV_OBJ_FLAG_SCROLL_WITH_ARROW);
@@ -107,34 +87,34 @@ void tick_screen_main() {
     void *flowState = getFlowState(0, 0);
     (void)flowState;
     {
-        if (state->indicator1) {
+        if (state->indicator) {
             int32_t new_val = evalIntegerProperty(flowState, 0, 3, "Failed to evaluate Value in Meter widget");
+            int32_t cur_val = state->indicator->start_value;
+            if (new_val != cur_val) {
+                tick_value_change_obj = objects.obj1;
+                lv_meter_set_indicator_value(objects.obj1, state->indicator, new_val);
+                tick_value_change_obj = NULL;
+            }
+        }
+    }
+    {
+        if (state->indicator1) {
+            int32_t new_val = evalIntegerProperty(flowState, 0, 4, "Failed to evaluate Value in Meter widget");
             int32_t cur_val = state->indicator1->start_value;
             if (new_val != cur_val) {
-                tick_value_change_obj = objects.obj0;
-                lv_meter_set_indicator_value(objects.obj0, state->indicator1, new_val);
+                tick_value_change_obj = objects.obj1;
+                lv_meter_set_indicator_value(objects.obj1, state->indicator1, new_val);
                 tick_value_change_obj = NULL;
             }
         }
     }
     {
         if (state->indicator2) {
-            int32_t new_val = evalIntegerProperty(flowState, 0, 4, "Failed to evaluate Value in Meter widget");
+            int32_t new_val = evalIntegerProperty(flowState, 0, 5, "Failed to evaluate Value in Meter widget");
             int32_t cur_val = state->indicator2->start_value;
             if (new_val != cur_val) {
-                tick_value_change_obj = objects.obj0;
-                lv_meter_set_indicator_value(objects.obj0, state->indicator2, new_val);
-                tick_value_change_obj = NULL;
-            }
-        }
-    }
-    {
-        if (state->indicator3) {
-            int32_t new_val = evalIntegerProperty(flowState, 0, 5, "Failed to evaluate Value in Meter widget");
-            int32_t cur_val = state->indicator3->start_value;
-            if (new_val != cur_val) {
-                tick_value_change_obj = objects.obj0;
-                lv_meter_set_indicator_value(objects.obj0, state->indicator3, new_val);
+                tick_value_change_obj = objects.obj1;
+                lv_meter_set_indicator_value(objects.obj1, state->indicator2, new_val);
                 tick_value_change_obj = NULL;
             }
         }

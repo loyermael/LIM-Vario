@@ -66,7 +66,7 @@ static void Encoder_MC_Read()
 static void Encoder_MC_Apply()
 {
   if (screen_main_state.indicator1) {
-    lv_meter_set_indicator_value(objects.obj0, screen_main_state.indicator1,
+    lv_meter_set_indicator_value(objects.obj1, screen_main_state.indicator1,
                                  (int32_t)(g_mc * 1000.0f));
   }
 }
@@ -125,9 +125,7 @@ void setup()
   Serial.println(">> SD_Init");        SD_Init();
   Serial.println(">> Lvgl_Init");      Lvgl_Init();       // Init LVGL + buffers
   Serial.println(">> ui_init");        ui_init();         // Interface L!M Vario
-
-  // Correctif arc arrondi (meter lit arc_rounded sur LV_PART_ITEMS)
-  lv_obj_set_style_arc_rounded(objects.obj0, true, LV_PART_ITEMS | LV_STATE_DEFAULT);
+  // (arc + labels sont maintenant dans l'image de fond du cadran)
 
   Serial.println(">> Encoder_MC_Init"); Encoder_MC_Init();
   // Tache rapide de lecture encodeur (core 0, toutes les 2 ms)

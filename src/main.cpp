@@ -173,6 +173,8 @@ static void Menu_LvglSetup()
   // Padding : centre l'item dans le cadre (cadre a ~y157 dans le panneau)
   lv_obj_set_style_pad_top(objects.item_list, 140, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_pad_bottom(objects.item_list, 175, LV_PART_MAIN | LV_STATE_DEFAULT);
+  // Clip CIRCULAIRE : coupe la liste au bord du cercle (pas au rectangle)
+  lv_obj_set_style_clip_corner(objects.quick_menu_panel, true, LV_PART_MAIN | LV_STATE_DEFAULT);
   // Menu cache au demarrage
   lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
   // Le cadre garde son look EEZ (fond blanc transparent + contour) -> on n'y touche pas

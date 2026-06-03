@@ -14,77 +14,182 @@
 #include "BAT_Driver.h"
 
 #include "ui/ui.h"        // Interface EEZ Studio (ui_init / ui_tick)
-#include "ui/screens.h"   // Acces aux objets LVGL (objects.obj0 = meter)
+#include "ui/screens.h"   // Acces aux objets LVGL (meter = obj6)
 
 #include <ESP32Encoder.h> // Encodeur MC (EC11)
 
-// --- Encodeur MC (EC11) : A=GPIO43, B=GPIO44, bouton=GPIO0 ---
-#define ENC_MC_A    43
-#define ENC_MC_B    44
-#define ENC_MC_SW   0
-static ESP32Encoder mcEnc;
-static long mcLastSteps = 0;
-static bool mcBtnLast = true;
+// ============================================================
+//  ENCODEUR (EC11) : A=GPIO43, B=GPIO44, bouton=GPIO0
+// ============================================================
+#define ENC_A   43
+#define ENC_B   44
+#define ENC_SW  0
+static ESP32Encoder enc;
+static long encLastSteps = 0;
+static bool encBtnLast   = true;
 
-// Valeur MacCready reglee par l'encodeur (m/s)
-static float g_mc = 0.0f;
-#define MC_STEP   0.1f
-#define MC_MIN    0.0f
-#define MC_MAX    5.0f
+// ============================================================
+//  MacCready (regle par l'encodeur quand le menu est ferme)
+// ============================================================
+static volatile float g_mc = 0.0f;
+#define MC_STEP  0.1f
+#define MC_MIN   0.0f
+#define MC_MAX   5.0f
 
-static void Encoder_MC_Init()
+// ============================================================
+//  QUICK MENU
+// ============================================================
+enum MenuState { MENU_CLOSED, MENU_NAV, MENU_EDIT };
+static volatile MenuState g_menuState = MENU_CLOSED;
+static volatile int  g_menuIndex = 0;
+static volatile bool g_menuDirty = true;   // demande d'appliquer a LVGL
+
+#define MENU_COUNT  6     // QNH, Water, Bugs, PilotWt, Profil, Exit
+#define MENU_EXIT   5
+#define MENU_ROW_H  44    // espacement des lignes (px)
+
+// Valeurs editables
+static volatile int g_qnh    = 1013;
+static volatile int g_water  = 0;
+static volatile int g_bugs   = 0;
+static volatile int g_weight = 0;
+
+// ---- Logique appelee depuis la TACHE encodeur : MET A JOUR L'ETAT SEULEMENT
+//      (interdit d'appeler LVGL ici -> pas thread-safe)
+static void menu_onButton()
 {
-  ESP32Encoder::useInternalWeakPullResistors = puType::up;
-  mcEnc.attachFullQuad(ENC_MC_A, ENC_MC_B);
-  mcEnc.setFilter(1023);          // filtre anti-rebond hardware
-  mcEnc.setCount(0);
-  pinMode(ENC_MC_SW, INPUT_PULLUP);
+  switch (g_menuState) {
+    case MENU_CLOSED:
+      g_menuState = MENU_NAV;
+      g_menuIndex = 0;
+      break;
+    case MENU_NAV:
+      if (g_menuIndex == MENU_EXIT) g_menuState = MENU_CLOSED;
+      else                          g_menuState = MENU_EDIT;
+      break;
+    case MENU_EDIT:
+      g_menuState = MENU_NAV;
+      break;
+  }
+  g_menuDirty = true;
 }
 
-static void Encoder_MC_Read()
+static void menu_onRotate(long delta)
 {
-  // FullQuad = 4 comptages par cran
-  long steps = mcEnc.getCount() / 4;
-  if (steps != mcLastSteps) {
-    long delta = steps - mcLastSteps;
-    mcLastSteps = steps;
-
-    // Ajuste le MacCready
+  if (g_menuState == MENU_CLOSED) {
+    // Reglage MacCready
     g_mc += (float)delta * MC_STEP;
     if (g_mc < MC_MIN) g_mc = MC_MIN;
     if (g_mc > MC_MAX) g_mc = MC_MAX;
-    Serial.printf("MC = %.1f m/s\n", g_mc);
   }
-  bool btn = digitalRead(ENC_MC_SW);
-  if (btn == LOW && mcBtnLast == HIGH) {
-    Serial.println("MC bouton: APPUI");
+  else if (g_menuState == MENU_NAV) {
+    int i = g_menuIndex + (int)delta;
+    if (i < 0)             i = 0;
+    if (i > MENU_COUNT - 1) i = MENU_COUNT - 1;
+    g_menuIndex = i;
+    g_menuDirty = true;
   }
-  mcBtnLast = btn;
+  else { // MENU_EDIT
+    switch (g_menuIndex) {
+      case 0: g_qnh    += delta; if (g_qnh<900)  g_qnh=900;  if (g_qnh>1100) g_qnh=1100; break;
+      case 1: g_water  += delta; if (g_water<0)  g_water=0;  if (g_water>300) g_water=300; break;
+      case 2: g_bugs   += delta; if (g_bugs<0)   g_bugs=0;   if (g_bugs>50)  g_bugs=50;  break;
+      case 3: g_weight += delta; if (g_weight<0) g_weight=0; if (g_weight>150) g_weight=150; break;
+      // 4 = Profil (pas d'edition pour l'instant), 5 = Exit
+    }
+    g_menuDirty = true;
+  }
 }
 
-// Applique la valeur MC sur la fleche verte (apres le tick du flow)
-static void Encoder_MC_Apply()
+static void Encoder_Read()
 {
-  if (screen_main_state.indicator1) {
-    lv_meter_set_indicator_value(objects.obj1, screen_main_state.indicator1,
+  long steps = enc.getCount() / 4;          // FullQuad : 4 comptages / cran
+  if (steps != encLastSteps) {
+    long delta = steps - encLastSteps;
+    encLastSteps = steps;
+    menu_onRotate(delta);
+  }
+  bool btn = digitalRead(ENC_SW);
+  if (btn == LOW && encBtnLast == HIGH) {   // front descendant = appui
+    menu_onButton();
+  }
+  encBtnLast = btn;
+}
+
+static void Encoder_Task(void *p)
+{
+  for (;;) { Encoder_Read(); vTaskDelay(pdMS_TO_TICKS(2)); }
+}
+
+static void Encoder_Init()
+{
+  ESP32Encoder::useInternalWeakPullResistors = puType::up;
+  enc.attachFullQuad(ENC_A, ENC_B);
+  enc.setFilter(1023);
+  enc.setCount(0);
+  pinMode(ENC_SW, INPUT_PULLUP);
+}
+
+// ============================================================
+//  APPLICATION LVGL  (appelee dans loop() = thread LVGL -> SAFE)
+// ============================================================
+static void Menu_LvglSetup()
+{
+  // Padding pour que la 1ere et la derniere ligne puissent se centrer
+  lv_obj_set_scroll_snap_y(objects.item_list, LV_SCROLL_SNAP_NONE);
+  lv_obj_set_style_pad_top(objects.item_list, 115, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_pad_bottom(objects.item_list, 115, LV_PART_MAIN | LV_STATE_DEFAULT);
+  // Menu cache au demarrage
+  lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
+  // Cadre vide (mode navigation)
+  lv_obj_set_style_bg_opa(objects.selection_frame, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+}
+
+static void Menu_Apply()
+{
+  if (!g_menuDirty) return;
+  g_menuDirty = false;
+
+  if (g_menuState == MENU_CLOSED) {
+    lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_obj_clear_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
+
+  // Defilement : centre l'item selectionne dans le cadre
+  lv_obj_scroll_to_y(objects.item_list, g_menuIndex * MENU_ROW_H, LV_ANIM_ON);
+
+  // Cadre : rempli en EDITION, vide en NAVIGATION
+  if (g_menuState == MENU_EDIT) {
+    lv_obj_set_style_bg_opa(objects.selection_frame, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(objects.selection_frame, lv_color_hex(0xfbd500), LV_PART_MAIN | LV_STATE_DEFAULT);
+  } else {
+    lv_obj_set_style_bg_opa(objects.selection_frame, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+  }
+
+  // Mise a jour des valeurs
+  char buf[16];
+  snprintf(buf, sizeof(buf), "%d",    g_qnh);    lv_label_set_text(objects.val_qnh,    buf);
+  snprintf(buf, sizeof(buf), "%d L",  g_water);  lv_label_set_text(objects.val_water,  buf);
+  snprintf(buf, sizeof(buf), "%d %%", g_bugs);   lv_label_set_text(objects.val_bugs,   buf);
+  snprintf(buf, sizeof(buf), "%d kg", g_weight); lv_label_set_text(objects.val_weight, buf);
+}
+
+// Fleche MC verte sur le meter (obj6), indicateur arrow_mc = state->indicator
+static void MC_Apply()
+{
+  if (screen_main_state.indicator) {
+    lv_meter_set_indicator_value(objects.obj6, screen_main_state.indicator,
                                  (int32_t)(g_mc * 1000.0f));
   }
 }
 
-// Tache dediee : lit l'encodeur toutes les 2 ms (independant du rendu)
-static void Encoder_Task(void *param)
-{
-  for (;;) {
-    Encoder_MC_Read();
-    vTaskDelay(pdMS_TO_TICKS(2));
-  }
-}
-
-// --- Tache de fond : capteurs lents (IMU, RTC, batterie) ---
+// ============================================================
+//  Tache de fond : capteurs lents (IMU, RTC, batterie)
+// ============================================================
 void Driver_Loop(void *parameter)
 {
-  while (1)
-  {
+  while (1) {
     QMI8658_Loop();
     RTC_Loop();
     BAT_Get_Volts();
@@ -102,17 +207,10 @@ void Driver_Init()
   PCF85063_Init();
   QMI8658_Init();
 
-  xTaskCreatePinnedToCore(
-    Driver_Loop,
-    "Other Driver task",
-    4096,
-    NULL,
-    3,
-    NULL,
-    0
-  );
+  xTaskCreatePinnedToCore(Driver_Loop, "Other Driver task", 4096, NULL, 3, NULL, 0);
 }
 
+// ============================================================
 void setup()
 {
   Serial.begin(115200);
@@ -121,14 +219,14 @@ void setup()
 
   Serial.println(">> Wireless_Test2"); Wireless_Test2();
   Serial.println(">> Driver_Init");    Driver_Init();
-  Serial.println(">> LCD_Init");       LCD_Init();        // Init ecran (avant SD)
+  Serial.println(">> LCD_Init");       LCD_Init();
   Serial.println(">> SD_Init");        SD_Init();
-  Serial.println(">> Lvgl_Init");      Lvgl_Init();       // Init LVGL + buffers
-  Serial.println(">> ui_init");        ui_init();         // Interface L!M Vario
-  // (arc + labels sont maintenant dans l'image de fond du cadran)
+  Serial.println(">> Lvgl_Init");      Lvgl_Init();
+  Serial.println(">> ui_init");        ui_init();
 
-  Serial.println(">> Encoder_MC_Init"); Encoder_MC_Init();
-  // Tache rapide de lecture encodeur (core 0, toutes les 2 ms)
+  Serial.println(">> Menu_LvglSetup"); Menu_LvglSetup();
+
+  Serial.println(">> Encoder_Init");   Encoder_Init();
   xTaskCreatePinnedToCore(Encoder_Task, "encoder", 8192, NULL, 4, NULL, 0);
 
   Serial.println(">> setup TERMINE OK");
@@ -136,8 +234,9 @@ void setup()
 
 void loop()
 {
-  Lvgl_Loop();       // Gere le rendu LVGL
-  ui_tick();         // <-- Moteur Flow EEZ (anime l'aiguille)
-  Encoder_MC_Apply();// <-- Applique MC sur la fleche verte (apres le flow)
+  Lvgl_Loop();    // rendu LVGL
+  ui_tick();      // moteur Flow EEZ (anime l'aiguille principale)
+  Menu_Apply();   // applique l'etat du menu (thread LVGL, safe)
+  MC_Apply();     // fleche MC verte
   vTaskDelay(pdMS_TO_TICKS(5));
 }

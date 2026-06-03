@@ -52,12 +52,21 @@ static volatile bool g_menuDirty = true;   // demande d'appliquer a LVGL
 static volatile int g_qnh    = 1013;
 static volatile int g_water  = 0;
 static volatile int g_bugs   = 0;
-static volatile int g_weight = 0;
+static volatile int g_weight = 70;   // poids de base 70 kg
+
+// Appui court / long + auto-fermeture
+static uint32_t btnDownTime  = 0;
+static bool     btnLongFired = false;
+#define LONG_PRESS_MS    600     // au-dela = appui long
+#define MENU_TIMEOUT_MS  8000    // fermeture auto apres 8s d'inactivite
+static volatile uint32_t g_menuLastActivity = 0;
 
 // ---- Logique appelee depuis la TACHE encodeur : MET A JOUR L'ETAT SEULEMENT
 //      (interdit d'appeler LVGL ici -> pas thread-safe)
+// Appui COURT
 static void menu_onButton()
 {
+  g_menuLastActivity = millis();
   switch (g_menuState) {
     case MENU_CLOSED:
       g_menuState = MENU_NAV;
@@ -74,8 +83,20 @@ static void menu_onButton()
   g_menuDirty = true;
 }
 
+// Appui LONG -> Setup menu (UI a creer). N'ouvre PAS le quick menu.
+static void menu_onLongPress()
+{
+  g_menuLastActivity = millis();
+  Serial.println("== APPUI LONG -> Setup menu (a creer) ==");
+  // Si le quick menu etait ouvert, on le ferme
+  g_menuState = MENU_CLOSED;
+  g_menuDirty = true;
+  // TODO: ouvrir l'ecran Setup quand il sera cree
+}
+
 static void menu_onRotate(long delta)
 {
+  g_menuLastActivity = millis();
   if (g_menuState == MENU_CLOSED) {
     // Reglage MacCready
     g_mc += (float)delta * MC_STEP;
@@ -91,10 +112,10 @@ static void menu_onRotate(long delta)
   }
   else { // MENU_EDIT
     switch (g_menuIndex) {
-      case 0: g_qnh    += delta; if (g_qnh<900)  g_qnh=900;  if (g_qnh>1100) g_qnh=1100; break;
-      case 1: g_water  += delta; if (g_water<0)  g_water=0;  if (g_water>300) g_water=300; break;
-      case 2: g_bugs   += delta; if (g_bugs<0)   g_bugs=0;   if (g_bugs>50)  g_bugs=50;  break;
-      case 3: g_weight += delta; if (g_weight<0) g_weight=0; if (g_weight>150) g_weight=150; break;
+      case 0: g_qnh    += delta;      if (g_qnh<900)  g_qnh=900;   if (g_qnh>1100) g_qnh=1100; break;
+      case 1: g_water  += delta * 10; if (g_water<0)  g_water=0;   if (g_water>300) g_water=300; break; // par 10
+      case 2: g_bugs   += delta * 10; if (g_bugs<0)   g_bugs=0;    if (g_bugs>90)  g_bugs=90;   break; // par 10
+      case 3: g_weight += delta;      if (g_weight<50) g_weight=50; if (g_weight>150) g_weight=150; break;
       // 4 = Profil (pas d'edition pour l'instant), 5 = Exit
     }
     g_menuDirty = true;
@@ -110,8 +131,17 @@ static void Encoder_Read()
     menu_onRotate(delta);
   }
   bool btn = digitalRead(ENC_SW);
-  if (btn == LOW && encBtnLast == HIGH) {   // front descendant = appui
-    menu_onButton();
+  uint32_t now = millis();
+  if (btn == LOW && encBtnLast == HIGH) {                 // appui (front descendant)
+    btnDownTime = now;
+    btnLongFired = false;
+  }
+  if (btn == LOW && !btnLongFired && (now - btnDownTime) > LONG_PRESS_MS) {
+    btnLongFired = true;
+    menu_onLongPress();                                   // APPUI LONG
+  }
+  if (btn == HIGH && encBtnLast == LOW) {                 // relache
+    if (!btnLongFired) menu_onButton();                   // APPUI COURT
   }
   encBtnLast = btn;
 }
@@ -135,11 +165,14 @@ static void Encoder_Init()
 // ============================================================
 static void Menu_LvglSetup()
 {
-  // Padding pour que la 1ere et la derniere ligne puissent se centrer
+  // La liste remplit tout le panneau -> clip au bord du cercle (pas avant)
+  lv_obj_set_pos(objects.item_list, -23, 0);
+  lv_obj_set_size(objects.item_list, 360, 345);
   lv_obj_set_scroll_snap_y(objects.item_list, LV_SCROLL_SNAP_NONE);
   lv_obj_set_scrollbar_mode(objects.item_list, LV_SCROLLBAR_MODE_OFF); // pas de barre
-  lv_obj_set_style_pad_top(objects.item_list, 115, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_pad_bottom(objects.item_list, 115, LV_PART_MAIN | LV_STATE_DEFAULT);
+  // Padding : centre l'item dans le cadre (cadre a ~y157 dans le panneau)
+  lv_obj_set_style_pad_top(objects.item_list, 140, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_pad_bottom(objects.item_list, 175, LV_PART_MAIN | LV_STATE_DEFAULT);
   // Menu cache au demarrage
   lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
   // Le cadre garde son look EEZ (fond blanc transparent + contour) -> on n'y touche pas
@@ -183,6 +216,16 @@ static void MC_Apply()
   if (screen_main_state.indicator) {
     lv_meter_set_indicator_value(objects.obj6, screen_main_state.indicator,
                                  (int32_t)(g_mc * 1000.0f));
+  }
+}
+
+// Fermeture automatique du menu apres inactivite
+static void Menu_AutoClose()
+{
+  if (g_menuState != MENU_CLOSED &&
+      (millis() - g_menuLastActivity) > MENU_TIMEOUT_MS) {
+    g_menuState = MENU_CLOSED;
+    g_menuDirty = true;
   }
 }
 
@@ -236,12 +279,10 @@ void setup()
 
 void loop()
 {
-  Lvgl_Loop();    // rendu LVGL
-  // Le vario n'anime QUE menu ferme -> gros gain FPS quand le menu est ouvert
-  if (g_menuState == MENU_CLOSED) {
-    ui_tick();    // moteur Flow EEZ (anime l'aiguille principale)
-    MC_Apply();   // fleche MC verte
-  }
-  Menu_Apply();   // applique l'etat du menu (thread LVGL, safe)
+  Lvgl_Loop();      // rendu LVGL
+  ui_tick();        // vario TOUJOURS actif (lisible meme menu ouvert)
+  MC_Apply();       // fleche MC verte
+  Menu_AutoClose(); // ferme le menu apres inactivite
+  Menu_Apply();     // applique l'etat du menu (thread LVGL, safe)
   vTaskDelay(pdMS_TO_TICKS(5));
 }

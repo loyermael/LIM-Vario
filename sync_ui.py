@@ -13,7 +13,7 @@ import os
 import shutil
 import glob
 
-SRC = r"C:\Users\loyer\Nextcloud\Data\13-Projet Perso\L!M Vario\UI\src\ui"
+SRC = r"C:\Users\loyer\Nextcloud\Data\13-Projet Perso\L!M Vario\L!M Vario UI\src\ui"
 DST = r"C:\Users\loyer\Nextcloud\Data\13-Projet Perso\L!M Vario\Firmware\src\ui"
 
 def main():

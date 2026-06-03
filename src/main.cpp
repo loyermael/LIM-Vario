@@ -137,12 +137,12 @@ static void Menu_LvglSetup()
 {
   // Padding pour que la 1ere et la derniere ligne puissent se centrer
   lv_obj_set_scroll_snap_y(objects.item_list, LV_SCROLL_SNAP_NONE);
+  lv_obj_set_scrollbar_mode(objects.item_list, LV_SCROLLBAR_MODE_OFF); // pas de barre
   lv_obj_set_style_pad_top(objects.item_list, 115, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_pad_bottom(objects.item_list, 115, LV_PART_MAIN | LV_STATE_DEFAULT);
   // Menu cache au demarrage
   lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
-  // Cadre vide (mode navigation)
-  lv_obj_set_style_bg_opa(objects.selection_frame, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+  // Le cadre garde son look EEZ (fond blanc transparent + contour) -> on n'y touche pas
 }
 
 static void Menu_Apply()
@@ -154,18 +154,17 @@ static void Menu_Apply()
     lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
     return;
   }
-  lv_obj_clear_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 
-  // Defilement : centre l'item selectionne dans le cadre
-  lv_obj_scroll_to_y(objects.item_list, g_menuIndex * MENU_ROW_H, LV_ANIM_ON);
+  // Defilement INSTANTANE (pas d'anim) : reouverture directe sur QNH + moins de charge
+  lv_obj_scroll_to_y(objects.item_list, g_menuIndex * MENU_ROW_H, LV_ANIM_OFF);
 
-  // Cadre : rempli en EDITION, vide en NAVIGATION
-  if (g_menuState == MENU_EDIT) {
-    lv_obj_set_style_bg_opa(objects.selection_frame, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
-    lv_obj_set_style_bg_color(objects.selection_frame, lv_color_hex(0xfbd500), LV_PART_MAIN | LV_STATE_DEFAULT);
-  } else {
-    lv_obj_set_style_bg_opa(objects.selection_frame, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
-  }
+  // Couleur des VALEURS : jaune sur l'item en EDITION, blanc sinon
+  lv_obj_t* vals[5] = { objects.val_qnh, objects.val_water, objects.val_bugs,
+                        objects.val_weight, objects.val_profil };
+  for (int i = 0; i < 5; i++)
+    lv_obj_set_style_text_color(vals[i], lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+  if (g_menuState == MENU_EDIT && g_menuIndex < 5)
+    lv_obj_set_style_text_color(vals[g_menuIndex], lv_color_hex(0xfbd500), LV_PART_MAIN | LV_STATE_DEFAULT);
 
   // Mise a jour des valeurs
   char buf[16];
@@ -173,6 +172,9 @@ static void Menu_Apply()
   snprintf(buf, sizeof(buf), "%d L",  g_water);  lv_label_set_text(objects.val_water,  buf);
   snprintf(buf, sizeof(buf), "%d %%", g_bugs);   lv_label_set_text(objects.val_bugs,   buf);
   snprintf(buf, sizeof(buf), "%d kg", g_weight); lv_label_set_text(objects.val_weight, buf);
+
+  // Afficher le menu (apres avoir tout positionne -> pas de flash)
+  lv_obj_clear_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 // Fleche MC verte sur le meter (obj6), indicateur arrow_mc = state->indicator
@@ -235,8 +237,11 @@ void setup()
 void loop()
 {
   Lvgl_Loop();    // rendu LVGL
-  ui_tick();      // moteur Flow EEZ (anime l'aiguille principale)
+  // Le vario n'anime QUE menu ferme -> gros gain FPS quand le menu est ouvert
+  if (g_menuState == MENU_CLOSED) {
+    ui_tick();    // moteur Flow EEZ (anime l'aiguille principale)
+    MC_Apply();   // fleche MC verte
+  }
   Menu_Apply();   // applique l'etat du menu (thread LVGL, safe)
-  MC_Apply();     // fleche MC verte
   vTaskDelay(pdMS_TO_TICKS(5));
 }

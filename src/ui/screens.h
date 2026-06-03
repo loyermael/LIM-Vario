@@ -18,7 +18,20 @@ enum ScreensEnum {
 typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *obj0;
+    lv_obj_t *quick_menu_panel;
+    lv_obj_t *item_list;
+    lv_obj_t *val_profil;
     lv_obj_t *obj1;
+    lv_obj_t *val_weight;
+    lv_obj_t *obj2;
+    lv_obj_t *val_bugs;
+    lv_obj_t *obj3;
+    lv_obj_t *val_water;
+    lv_obj_t *obj4;
+    lv_obj_t *val_qnh;
+    lv_obj_t *obj5;
+    lv_obj_t *selection_frame;
+    lv_obj_t *obj6;
 } objects_t;
 
 extern objects_t objects;

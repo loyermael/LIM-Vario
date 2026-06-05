@@ -7,6 +7,9 @@
 #
 #  - copie src/ui depuis le projet EEZ
 #  - exclut vars.c (maintenu a la main pour les variables natives)
+#  - exclut le runtime EEZ (eez-flow.*) : il ne change PAS quand on edite
+#    l'UI, et EEZ regenere parfois un header/source incoherents qui
+#    cassent le build. On garde donc la paire qui compile, figee.
 #  - corrige les includes lvgl/lvgl.h -> lvgl.h
 # ============================================================
 import os
@@ -15,6 +18,9 @@ import glob
 
 SRC = r"C:\Users\loyer\Nextcloud\Data\13-Projet Perso\L!M Vario\L!M Vario UI\src\ui"
 DST = r"C:\Users\loyer\Nextcloud\Data\13-Projet Perso\L!M Vario\Firmware\src\ui"
+
+# Fichiers JAMAIS ecrases par le sync (maintenus a la main / figes)
+EXCLUDE = {"vars.c", "eez-flow.cpp", "eez-flow.h"}
 
 def main():
     if not os.path.isdir(SRC):
@@ -29,7 +35,7 @@ def main():
         s = os.path.join(SRC, name)
         if not os.path.isfile(s):
             continue
-        if name == "vars.c":
+        if name in EXCLUDE:
             continue
         shutil.copy2(s, os.path.join(DST, name))
         copied += 1

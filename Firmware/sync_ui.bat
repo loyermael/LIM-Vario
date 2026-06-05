@@ -10,7 +10,7 @@ set "SRC=C:\Users\loyer\Nextcloud\Data\13-Projet Perso\L!M Vario\UI\src\ui"
 set "DST=C:\Users\loyer\Nextcloud\Data\13-Projet Perso\L!M Vario\Firmware\src\ui"
 
 echo Sync EEZ  -^>  firmware ...
-robocopy "%SRC%" "%DST%" /E /XF vars.c /NFL /NDL /NJH /NJS
+robocopy "%SRC%" "%DST%" /E /XF vars.c eez-flow.cpp eez-flow.h /NFL /NDL /NJH /NJS
 
 echo Correction des includes LVGL ...
 powershell -NoProfile -Command "Get-ChildItem -Path '%DST%' -Recurse -Include *.c,*.h | ForEach-Object { $p=$_.FullName; (Get-Content $p -Raw).Replace('lvgl/lvgl.h','lvgl.h') | Set-Content $p -NoNewline }"

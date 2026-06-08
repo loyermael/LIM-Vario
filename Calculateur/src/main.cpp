@@ -22,8 +22,8 @@
 #include "lim_link.h"        // protocole partage (../Shared)
 
 // ---- Broches ----
-#define PIN_SDA   21
-#define PIN_SCL   22
+#define PIN_SDA   18   // (ancien 21, change car GPIO21 suspecte abimee)
+#define PIN_SCL   19   // (ancien 22)
 #define LINK_TX   17
 #define LINK_RX   16
 #define ENC1_A    32
@@ -71,7 +71,8 @@ void setup() {
 
   // --- I2C + BMP388 ---
   Wire.begin(PIN_SDA, PIN_SCL);
-  Wire.setClock(400000);
+  delay(100);             // laisse le bus se stabiliser
+  Wire.setClock(100000);  // 100kHz
   bmpOk = bmp.begin_I2C(0x77);
   if (!bmpOk) bmpOk = bmp.begin_I2C(0x76);
   if (bmpOk) {

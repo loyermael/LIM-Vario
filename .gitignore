@@ -35,3 +35,6 @@ __pycache__/
 *.tmp
 *.bak
 *.swp
+
+# EEZ Studio docker build cache
+.docker-build-output/

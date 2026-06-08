@@ -36,9 +36,34 @@ static bool g_linkSynced = false;
 
 static int32_t enc1Last = 0, enc2Last = 0;
 static bool    enc1BtnLast = false, enc2BtnLast = false;
-static volatile int g_volume = 50;
+static volatile int g_volume = 10;   // 0..20
 
 static uint32_t g_pktCount = 0;
+
+// ============================================================
+//  SON VARIO (GPIO0 → MOSFET → buzzer piezo passif)
+//  Algorithme style Larus/LX :
+//    Montee  : freq 700→2000 Hz, cadence 1200→120 ms
+//    Neutre  : silence (-0.3 à +0.15 m/s)
+//    Descente: 350 Hz continu (si Full) ou silence (si Mute)
+// ============================================================
+#define VARIO_PIN          0          // GPIO0 → buzzer externe (futur)
+// Buzzer interne Waveshare = EXIO_PIN8 via TCA9554 (I2C, software toggle)
+#define VARIO_DEAD_LOW    -0.30f      // m/s : seuil descente
+#define VARIO_DEAD_HIGH    0.15f      // m/s : seuil montee
+#define VARIO_VMAX         3.0f       // m/s : vario max (au-dela = cadence max)
+#define VARIO_FREQ_LOW     700        // Hz a DEAD_HIGH
+#define VARIO_FREQ_HIGH    2000       // Hz a VMAX
+#define VARIO_FREQ_SINK    350        // Hz descente
+#define VARIO_PERIOD_SLOW  1000       // ms : 1 bip/s a DEAD_HIGH
+#define VARIO_PERIOD_FAST   150       // ms : ~6 bips/s a VMAX
+#define VARIO_DUTY_ON       0.50f     // 50% bip / 50% silence (plus audible)
+
+// Arc de volume (affiche temporairement dans le moyeu quand enc2 tourne)
+static lv_obj_t*  g_arcVol     = NULL;   // l'arc LVGL
+static lv_obj_t*  g_lblVolNum  = NULL;   // le chiffre au centre de l'arc
+static uint32_t   g_volShownAt = 0;      // timestamp du dernier changement
+#define VOL_HIDE_MS  2000                // disparait apres 2s d'inactivite
 
 // ============================================================
 //  MacCready
@@ -56,7 +81,7 @@ static volatile int  g_menuIndex = 0;
 static volatile bool g_menuDirty = true;
 
 #define MENU_COUNT  7
-#define MENU_SOUND  5
+#define MENU_SOUND  4     // Sink Snd. est visuellement a la position 4 dans EEZ (y≈176)
 #define MENU_EXIT   6
 #define MENU_ROW_H  44
 
@@ -150,7 +175,24 @@ static void Link_HandleEncoders(const lim_packet_t* p)
   }
   uint32_t now = millis();
   long d1 = (long)p->enc1_count - (long)enc1Last;
-  if (d1 != 0) { enc1Last = p->enc1_count; menu_onRotate(d1); }
+  if (d1 != 0) {
+    enc1Last = p->enc1_count;
+    // Anti-rebond : ignore les micro-oscillations (+1 puis -1 dans les 80ms)
+    static int32_t lastDir1 = 0;
+    static uint32_t lastRot1Ms = 0;
+    int32_t dir = (d1 > 0) ? 1 : -1;
+    uint32_t nowMs = millis();
+    bool sameDir = (dir == lastDir1);
+    bool slowEnough = (nowMs - lastRot1Ms) > 80;  // ignore rebond < 80ms
+    if (sameDir || slowEnough) {
+      menu_onRotate(d1);
+      lastDir1  = dir;
+      lastRot1Ms = nowMs;
+    } else {
+      // Rebond detecte : on met a jour lastDir sans appliquer
+      lastDir1 = dir;
+    }
+  }
   bool b1 = p->enc1_btn;
   if (b1 && !enc1BtnLast)  { btnDownTime = now; btnLongFired = false; }
   if (b1 && !btnLongFired && (now - btnDownTime) > LONG_PRESS_MS) {
@@ -163,11 +205,18 @@ static void Link_HandleEncoders(const lim_packet_t* p)
   if (d2 != 0) {
     enc2Last = p->enc2_count;
     g_volume += (int)d2;
-    if (g_volume < 0)   g_volume = 0;
-    if (g_volume > 100) g_volume = 100;
+    if (g_volume < 0)  g_volume = 0;
+    if (g_volume > 20) g_volume = 20;
+    g_volShownAt = millis();  // declenche l'affichage de l'arc
   }
   bool b2 = p->enc2_btn;
-  if (!b2 && enc2BtnLast) { /* TODO bouton mode */ }
+  if (!b2 && enc2BtnLast) {
+    // Appui court enc2 = bascule mute (volume 0 ↔ derniere valeur)
+    static int savedVol = 10;
+    if (g_volume > 0) { savedVol = g_volume; g_volume = 0; }
+    else               { g_volume = savedVol; }
+    g_volShownAt = millis();  // affiche l'arc volume
+  }
   enc2BtnLast = b2;
 }
 
@@ -205,17 +254,20 @@ static void Link_Poll()
 //  APPLICATION LVGL (dans loop() = thread LVGL = safe)
 // ============================================================
 
-// Retourne le label "nom" de l'item de menu (pour le centrage)
+// Retourne le label NOM de chaque item (utilise pour le centrage)
+// Ordre VISUEL dans EEZ (par position Y croissante) :
+//   0=QNH(y=0) 1=Water(y=44) 2=Bugs(y=88) 3=PilotWt(y=132)
+//   4=SinkSnd(y=176) 5=Profil(y=220) 6=Exit(y=264)
 static lv_obj_t* Menu_NameLabel(int idx)
 {
   switch (idx) {
-    case 0: return objects.obj4;      // QNH  (nom, x=25)
-    case 1: return objects.obj3;      // Water B.
-    case 2: return objects.obj2;      // Bugs
-    case 3: return objects.obj1;      // Pilot Wt.
-    case 4: return objects.obj0;      // Profil
-    case 5: return objects.obj5;      // Sink Snd. (EEZ)
-    case 6: return objects._lbl_exit; // Exit
+    case 0: return objects.obj4;       // "QNH"       y=0
+    case 1: return objects.obj3;       // "Water B."  y=44
+    case 2: return objects.obj2;       // "Bugs"      y=88
+    case 3: return objects.obj1;       // "Pilot Wt." y=132
+    case 4: return objects.obj5;       // "Sink Snd." y=176
+    case 5: return objects.obj0;       // "Profil"    y=220
+    case 6: return objects._lbl_exit;  // "Exit"      y=264
   }
   return objects.obj4;
 }
@@ -229,7 +281,34 @@ static void Menu_LvglSetup()
   lv_obj_set_style_pad_top(objects.item_list,    200, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_pad_bottom(objects.item_list, 200, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_clip_corner(objects.quick_menu_panel, true, LV_PART_MAIN | LV_STATE_DEFAULT);
+  // Corriger le decalage de 3px de Sink Snd. (EEZ le place a y=179 au lieu de y=176)
+  lv_obj_set_y(objects.obj5, 176);   // "Sink Snd." → aligne sur la grille 44px
+  lv_obj_set_y(objects.obj6, 176);   // "Mute/Full" → meme ligne
   lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
+
+  // --- Arc de volume dans le moyeu central ---
+  g_arcVol = lv_arc_create(objects.center_hub);
+  lv_obj_set_size(g_arcVol, 180, 180);
+  lv_obj_center(g_arcVol);
+  lv_arc_set_rotation(g_arcVol, 135);          // demarre en bas a gauche
+  lv_arc_set_bg_angles(g_arcVol, 0, 270);      // arc de 270 degres
+  lv_arc_set_range(g_arcVol, 0, 20);
+  lv_arc_set_value(g_arcVol, g_volume);
+  lv_obj_remove_style(g_arcVol, NULL, LV_PART_KNOB); // pas de poignee
+  lv_obj_set_style_arc_color(g_arcVol, lv_color_hex(0xfbd500), LV_PART_INDICATOR | LV_STATE_DEFAULT); // jaune
+  lv_obj_set_style_arc_color(g_arcVol, lv_color_hex(0x333333), LV_PART_MAIN | LV_STATE_DEFAULT);      // fond gris
+  lv_obj_set_style_arc_width(g_arcVol, 8, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+  lv_obj_set_style_arc_width(g_arcVol, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_clear_flag(g_arcVol, LV_OBJ_FLAG_CLICKABLE);
+  // Chiffre au centre
+  g_lblVolNum = lv_label_create(objects.center_hub);
+  lv_obj_set_style_text_font(g_lblVolNum, &lv_font_montserrat_34, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(g_lblVolNum, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_center(g_lblVolNum);
+  lv_label_set_text(g_lblVolNum, "50");
+  // Cache par defaut
+  lv_obj_add_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void Menu_Apply()
@@ -243,9 +322,14 @@ static void Menu_Apply()
   }
 
   // Valeurs en blanc, jaune sur l'item en edition
+  // Ordre visuel EEZ : QNH, Water, Bugs, PilotWt, SinkSnd, Profil
   lv_obj_t* vals[6] = {
-    objects.val_qnh, objects.val_water, objects.val_bugs,
-    objects.val_weight, objects.val_profil, objects.obj6  // obj6 = val_sound (Mute/Full)
+    objects.val_qnh,    // 0 = QNH
+    objects.val_water,  // 1 = Water B.
+    objects.val_bugs,   // 2 = Bugs
+    objects.val_weight, // 3 = Pilot Wt.
+    objects.obj6,       // 4 = Sink Snd. (Mute/Full)
+    objects.val_profil  // 5 = Profil
   };
   for (int i = 0; i < 6; i++)
     lv_obj_set_style_text_color(vals[i], lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -263,11 +347,14 @@ static void Menu_Apply()
   lv_obj_clear_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 
   // Centrage exact de l'item selectionne sur le cadre jaune
-  lv_obj_update_layout(objects.quick_menu_panel);
+  // Double update_layout : garantit que les coords sont valides apres affichage
+  lv_obj_update_layout(objects.main);
   lv_area_t fa, la;
-  lv_obj_get_coords(objects.selection_frame,       &fa);
-  lv_obj_get_coords(Menu_NameLabel(g_menuIndex),   &la);
-  lv_coord_t delta = ((la.y1 + la.y2) - (fa.y1 + fa.y2)) / 2;
+  lv_obj_get_coords(objects.selection_frame,     &fa);
+  lv_obj_get_coords(Menu_NameLabel(g_menuIndex), &la);
+  lv_coord_t frame_cy = (fa.y1 + fa.y2) / 2;
+  lv_coord_t label_cy = (la.y1 + la.y2) / 2;
+  lv_coord_t delta    = label_cy - frame_cy;
   if (delta != 0) lv_obj_scroll_by(objects.item_list, 0, -delta, LV_ANIM_OFF);
 }
 
@@ -285,6 +372,94 @@ static void Needles_Apply()
   if (screen_main_state.indicator1)
     lv_meter_set_indicator_value(objects.vario_meter, screen_main_state.indicator1,
                                  (int32_t)(vi * 1000.0f));
+}
+
+// Arc de volume : visible pendant VOL_HIDE_MS apres le dernier changement
+static void Sound_Init()
+{
+  // Buzzer interne Waveshare = EXIO_PIN8 via TCA9554 (I2C)
+  // Le piezo sonne a sa frequence naturelle quand on le met a HIGH.
+  // On controle uniquement l'ENVELOPPE ON/OFF du bip (pas la frequence).
+  // La vitesse de bip varie avec le vario → son identifiable meme a freq fixe.
+  Set_EXIO(EXIO_PIN8, Low);  // silence au demarrage (deja fait dans Driver_Init)
+}
+
+static void Sound_Apply()
+{
+  static bool     bipOn   = false;   // bip actif (pin HIGH) ou silence (pin LOW)
+  static uint32_t bipTime = 0;       // timestamp dernier changement d'etat
+  uint32_t now = millis();
+
+  float v = isnan(g_vario) ? 0.0f : g_vario;
+
+  // --- Volume 0 = silence total ---
+  if (g_volume == 0) {
+    if (bipOn) { Set_EXIO(EXIO_PIN8, Low); bipOn = false; }
+    return;
+  }
+
+  // --- Zone morte : silence ---
+  if (v > VARIO_DEAD_LOW && v < VARIO_DEAD_HIGH) {
+    if (bipOn) { Set_EXIO(EXIO_PIN8, Low); bipOn = false; }
+    return;
+  }
+
+  // --- Descente ---
+  if (v <= VARIO_DEAD_LOW) {
+    if (!g_sinkSound) {
+      if (bipOn) { Set_EXIO(EXIO_PIN8, Low); bipOn = false; }
+      return;
+    }
+    // Full : bip continu lent en descente (1 Hz)
+    uint32_t half = 500;  // 500ms on / 500ms off
+    if (now - bipTime >= half) {
+      bipOn = !bipOn;
+      Set_EXIO(EXIO_PIN8, bipOn ? High : Low);
+      bipTime = now;
+    }
+    return;
+  }
+
+  // --- Montee : cadence de bip qui augmente avec le vario ---
+  float t = (v - VARIO_DEAD_HIGH) / (VARIO_VMAX - VARIO_DEAD_HIGH);
+  t = fminf(1.0f, fmaxf(0.0f, t));
+
+  // Periode totale du bip : 1200ms (faible montee) → 120ms (forte montee)
+  uint32_t period = (uint32_t)(VARIO_PERIOD_SLOW - t * (VARIO_PERIOD_SLOW - VARIO_PERIOD_FAST));
+  uint32_t onMs   = (uint32_t)(period * VARIO_DUTY_ON);   // duree du bip
+  uint32_t offMs  = period - onMs;                         // duree du silence
+
+  if (bipOn) {
+    if (now - bipTime >= onMs) {
+      Set_EXIO(EXIO_PIN8, Low);
+      bipOn   = false;
+      bipTime = now;
+    }
+  } else {
+    if (now - bipTime >= offMs) {
+      Set_EXIO(EXIO_PIN8, High);
+      bipOn   = true;
+      bipTime = now;
+    }
+  }
+}
+
+static void Vol_Apply()
+{
+  if (!g_arcVol || !g_lblVolNum) return;
+  bool shouldShow = (g_volShownAt > 0) &&
+                    ((millis() - g_volShownAt) < VOL_HIDE_MS) &&
+                    (g_menuState == MENU_CLOSED);  // masque si menu ouvert
+  if (shouldShow) {
+    lv_arc_set_value(g_arcVol, g_volume);
+    char buf[8]; snprintf(buf, sizeof(buf), "%d", g_volume);
+    lv_label_set_text(g_lblVolNum, buf);
+    lv_obj_clear_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_obj_add_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
+  }
 }
 
 static void MC_Apply()
@@ -389,6 +564,7 @@ void setup()
 
   Serial.println(">> Menu_LvglSetup"); Menu_LvglSetup();
   Serial.println(">> Link_Init");      Link_Init();
+  Serial.println(">> Sound_Init");     Sound_Init();
 
   Serial.println(">> setup TERMINE OK");
 }
@@ -399,6 +575,8 @@ void loop()
   Link_Poll();
   Needles_Apply();
   Labels_Apply();
+  Sound_Apply(); // son vario (GPIO0 → buzzer)
+  Vol_Apply();   // arc volume temporaire (encodeur 2)
   MC_Apply();
   Menu_AutoClose();
   Menu_Apply();

@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="GraphX/L!M%20Technologies%20LOGO.jpg" alt="L!M Vario logo" width="180">
-</p>
-
 # L!M Vario
 
 **Open source glider variometer** built on a Waveshare ESP32-S3 2.1" round display (480×480).

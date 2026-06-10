@@ -148,10 +148,14 @@ static void kalman_update_acc(float z)
 // ------------------------------------------------------------
 //  API
 // ------------------------------------------------------------
+static float g_lastAVert = 0.0f;
+
 bool VarioFusion_Ready(void)
 {
   return kalInit && (millis() - startMs > ALIGN_MS);
 }
+
+float VarioFusion_GetVertAccel(void) { return g_lastAVert; }
 
 float VarioFusion_Step(float ax, float ay, float az,
                        float gx, float gy, float gz,
@@ -176,6 +180,7 @@ float VarioFusion_Step(float ax, float ay, float az,
   float kp = (nowMs - startMs < ALIGN_MS) ? KP_ALIGN : KP_RUN;
   mahony_update(gx * DEG2RAD, gy * DEG2RAD, gz * DEG2RAD, ax, ay, az, kp, dt);
   float aVert = vertical_accel(ax, ay, az);
+  g_lastAVert = aVert;
 
   // --- Kalman ---
   bool baroOk = (p_pa > 30000.0f && p_pa < 110000.0f);

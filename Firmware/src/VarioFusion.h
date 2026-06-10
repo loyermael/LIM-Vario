@@ -29,3 +29,6 @@ float VarioFusion_Step(float ax, float ay, float az,
 
 // true quand l'AHRS est aligne et le Kalman initialise
 bool VarioFusion_Ready(void);
+
+// derniere acceleration verticale terre (m/s^2, gravite retiree) - pour le log
+float VarioFusion_GetVertAccel(void);

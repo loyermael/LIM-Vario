@@ -13,7 +13,7 @@ Inspired by [Larus](https://github.com/larus-breeze), [LX Navigation](https://gl
 | Component | Role |
 |-----------|------|
 | [Waveshare ESP32-S3-Touch-LCD-2.1](https://www.waveshare.com/wiki/ESP32-S3-Touch-LCD-2.1) | Round 480×480 display + touch |
-| ESP32 DevKit V4 | Sensor & encoder calculator |
+| ESP32 DevKit V4 | Sensor, encoder & calculator |
 | BMP388 (CJMCU-388) | Absolute pressure → altitude + vario |
 | MS4525DO *(optional)* | Differential pressure → airspeed → TE compensation |
 | 2× EC11 rotary encoder | MC setting / menu + volume / mode |

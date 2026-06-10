@@ -10,8 +10,12 @@ C:/PioBuild/
 _Archive/
 _Backup*/
 
-# Ancien dossier UI (doublon de "L!M Vario UI")
-UI/
+# Ancien dossier UI a la RACINE uniquement (doublon de "L!M Vario UI")
+# (PAS "UI/" tout court : sur Windows ca ignorait aussi Firmware/src/ui !)
+/UI/
+
+# Marqueur de build EEZ
+.eez-project-build
 
 # EEZ Studio cache
 *.eez-project-ui-state
@@ -38,3 +42,9 @@ __pycache__/
 
 # EEZ Studio docker build cache
 .docker-build-output/
+
+# Modeles 3D fabricant (trop lourds, dispo chez Waveshare)
+3D/ESP32-LCD*
+
+# Fichiers lock Affinity
+*~lock~

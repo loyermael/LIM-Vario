@@ -48,3 +48,7 @@ __pycache__/
 
 # Fichiers lock Affinity
 *~lock~
+
+# Dossiers locaux non publies
+/3D/
+/GraphX/

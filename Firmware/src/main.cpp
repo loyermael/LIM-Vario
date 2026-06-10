@@ -20,6 +20,7 @@
 #include "ui/screens.h"
 #include "lim_link.h"
 #include "VarioFusion.h"
+#include "FlightLog.h"
 #include <math.h>
 
 // ============================================================
@@ -218,7 +219,14 @@ static void Link_HandleEncoders(const lim_packet_t* p)
     g_volShownAt = millis();  // declenche l'affichage de l'arc
   }
   bool b2 = p->enc2_btn;
-  if (!b2 && enc2BtnLast) {
+  static uint32_t btn2DownTime = 0;
+  static bool     btn2LongFired = false;
+  if (b2 && !enc2BtnLast) { btn2DownTime = now; btn2LongFired = false; }
+  if (b2 && !btn2LongFired && (now - btn2DownTime) > LONG_PRESS_MS) {
+    btn2LongFired = true;
+    FlightLog_ServerToggle();      // appui long enc2 = WiFi logs ON/OFF
+  }
+  if (!b2 && enc2BtnLast && !btn2LongFired) {
     // Appui court enc2 = bascule mute (volume 0 ↔ derniere valeur)
     static int savedVol = 10;
     if (g_volume > 0) { savedVol = g_volume; g_volume = 0; }
@@ -581,6 +589,7 @@ void setup()
   Serial.println(">> Driver_Init");    Driver_Init();
   Serial.println(">> LCD_Init");       LCD_Init();
   Serial.println(">> SD_Init");        SD_Init();
+  Serial.println(">> FlightLog_Init"); FlightLog_Init();
   Serial.println(">> Lvgl_Init");      Lvgl_Init();
   Serial.println(">> ui_init");        ui_init();
 
@@ -602,6 +611,11 @@ void loop()
   MC_Apply();
   Menu_AutoClose();
   Menu_Apply();
+
+  // Journal de vol (10 Hz) + serveur WiFi de recuperation
+  FlightLog_Tick(g_pressure, g_altitude, g_vario, g_varioFused,
+                 VarioFusion_GetVertAccel(), g_volume);
+  FlightLog_ServerLoop();
 
   static uint32_t lastDbg = 0;
   if (millis() - lastDbg >= 2000) {

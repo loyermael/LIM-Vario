@@ -19,6 +19,7 @@
 #include "ui/ui.h"
 #include "ui/screens.h"
 #include "lim_link.h"
+#include "VarioFusion.h"
 #include <math.h>
 
 // ============================================================
@@ -39,6 +40,13 @@ static bool    enc1BtnLast = false, enc2BtnLast = false;
 static volatile int g_volume = 10;   // 0..20
 
 static uint32_t g_pktCount = 0;
+
+// ============================================================
+//  FUSION IMU + BARO "facon Larus" (voir VarioFusion.cpp)
+//  AHRS Mahony + Kalman 4 etats {alt, vario, accel, biais}.
+//  Tourne dans Driver_Loop (core 0, cadence reguliere ~50 Hz).
+// ============================================================
+static volatile float g_varioFused = 0.0f;   // vario fusionne (m/s)
 
 // ============================================================
 //  SON VARIO (GPIO0 → MOSFET → buzzer piezo passif)
@@ -364,8 +372,8 @@ static void Needles_Apply()
   uint32_t now = millis();
   if (g_menuState != MENU_CLOSED && (now - last) < 160) return;
   last = now;
-  float v  = isnan(g_vario)    ? 0.0f : g_vario;
-  float vi = isnan(g_varioInt) ? 0.0f : g_varioInt;
+  float v  = isnan(g_varioFused) ? 0.0f : g_varioFused;   // aiguille = vario inertiel
+  float vi = isnan(g_varioInt)   ? 0.0f : g_varioInt;
   if (screen_main_state.indicator2)
     lv_meter_set_indicator_value(objects.vario_meter, screen_main_state.indicator2,
                                  (int32_t)(v * 1000.0f));
@@ -390,7 +398,7 @@ static void Sound_Apply()
   static uint32_t bipTime = 0;       // timestamp dernier changement d'etat
   uint32_t now = millis();
 
-  float v = isnan(g_vario) ? 0.0f : g_vario;
+  float v = isnan(g_varioFused) ? 0.0f : g_varioFused;   // son = vario inertiel
 
   // --- Volume 0 = silence total ---
   if (g_volume == 0) {
@@ -490,7 +498,7 @@ static void Labels_Apply()
   // Vario instantane (arrondi a 0.1 m/s)
   if (objects.lbl_vario) {
     static int lastV = -99999;
-    float v = isnan(g_vario) ? 0.0f : g_vario;
+    float v = isnan(g_varioFused) ? 0.0f : g_varioFused;   // affiche = vario inertiel
     int vt = (int)(v * 10.0f + (v >= 0 ? 0.5f : -0.5f));
     if (vt != lastV) {
       lastV = vt;
@@ -528,11 +536,25 @@ static void Menu_AutoClose()
 // ============================================================
 void Driver_Loop(void *parameter)
 {
+  uint8_t  slow    = 0;
+  uint32_t lastPkt = 0;
   while (1) {
-    QMI8658_Loop();
-    RTC_Loop();
-    BAT_Get_Volts();
-    vTaskDelay(pdMS_TO_TICKS(100));
+    QMI8658_Loop();                 // IMU ~50 Hz (accel + gyro pour la fusion)
+
+    // Fusion vario (AHRS + Kalman) : cadence reguliere, core 0
+    uint32_t pkts   = g_pktCount;
+    bool     newBaro = (pkts != lastPkt);
+    lastPkt = pkts;
+    g_varioFused = VarioFusion_Step(Accel.x, Accel.y, Accel.z,
+                                    Gyro.x,  Gyro.y,  Gyro.z,
+                                    g_pressure, newBaro, g_vario);
+
+    if (++slow >= 5) {              // RTC + batterie : ~10 Hz suffit
+      slow = 0;
+      RTC_Loop();
+      BAT_Get_Volts();
+    }
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
@@ -584,9 +606,10 @@ void loop()
   static uint32_t lastDbg = 0;
   if (millis() - lastDbg >= 2000) {
     lastDbg = millis();
-    Serial.printf("[link] trames=%lu ok=%d | vario=%+.2f alt=%.0f vol=%d\n",
+    Serial.printf("[link] trames=%lu ok=%d | baro=%+.2f fus=%+.2f rdy=%d alt=%.0f vol=%d\n",
                   (unsigned long)g_pktCount, g_linkOk ? 1 : 0,
-                  g_vario, g_altitude, g_volume);
+                  g_vario, g_varioFused, VarioFusion_Ready() ? 1 : 0,
+                  g_altitude, g_volume);
   }
 
   vTaskDelay(pdMS_TO_TICKS(5));

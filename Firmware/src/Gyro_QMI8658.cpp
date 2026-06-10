@@ -5,7 +5,7 @@ IMUdata Gyro;
 
 uint8_t Device_addr ; // default for SD0/SA0 low, 0x6A if high
 acc_scale_t acc_scale = ACC_RANGE_4G;
-gyro_scale_t gyro_scale = GYR_RANGE_64DPS;
+gyro_scale_t gyro_scale = GYR_RANGE_256DPS;  // 64 dps trop juste en virage serre
 acc_odr_t acc_odr = acc_odr_norm_8000;
 gyro_odr_t gyro_odr = gyro_odr_norm_8000;
 sensor_state_t sensor_state = sensor_default;
@@ -62,6 +62,7 @@ void QMI8658_Init(void)
 void QMI8658_Loop(void)
 {
   getAccelerometer();
+  getGyroscope();      // requis par la fusion vario (AHRS)
 }
 
 /**

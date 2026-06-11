@@ -6,8 +6,9 @@ IMUdata Gyro;
 uint8_t Device_addr ; // default for SD0/SA0 low, 0x6A if high
 acc_scale_t acc_scale = ACC_RANGE_4G;
 gyro_scale_t gyro_scale = GYR_RANGE_256DPS;  // 64 dps trop juste en virage serre
-acc_odr_t acc_odr = acc_odr_norm_8000;
-gyro_odr_t gyro_odr = gyro_odr_norm_8000;
+// 250 Hz + LPF fort : a 8000 Hz le bruit de vibration rendait le vario nerveux
+acc_odr_t acc_odr = acc_odr_norm_250;
+gyro_odr_t gyro_odr = gyro_odr_norm_250;
 sensor_state_t sensor_state = sensor_default;
 lpf_t acc_lpf;
 
@@ -27,9 +28,9 @@ void QMI8658_Init(void)
     printf("QMI8658 Device ID: %x\r\n",buf[0]);    // Get chip id
     setState(sensor_running);             
 
-    setAccScale(acc_scale);            
-    setAccODR(acc_odr);                    
-    setAccLPF(LPF_MODE_0);                  
+    setAccScale(acc_scale);
+    setAccODR(acc_odr);
+    setAccLPF(LPF_MODE_3);   // passe-bas max (13% ODR = ~33 Hz) : anti-vibration
     switch (acc_scale) {                
         // Possible accelerometer scales (and their register bit settings) are:
         // 2 Gs (00), 4 Gs (01), 8 Gs (10), and 16 Gs  (11).

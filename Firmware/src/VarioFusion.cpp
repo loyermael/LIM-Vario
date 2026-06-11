@@ -14,10 +14,13 @@
 #define KP_RUN       0.35f    // gain faible en vol (l'accel "ment" en virage)
 #define ALIGN_MS     3000     // duree d'alignement au demarrage
 // Kalman (bruits ; a ajuster en vol si besoin)
-#define Q_ACC        3.0f     // (m/s^2)^2/s : agilite du vario (grand = + vif)
+#define Q_ACC        1.0f     // (m/s^2)^2/s : agilite du vario (grand = + vif/nerveux)
 #define Q_BIAS       1e-4f    // derive lente du biais accelero
 #define R_ALT        0.25f    // m^2        : bruit altitude baro (~0.5 m)
-#define R_ACC        0.09f    // (m/s^2)^2  : bruit accel verticale (~0.3 m/s^2)
+#define R_ACC        0.36f    // (m/s^2)^2  : bruit accel verticale (~0.6 m/s^2)
+// Constante de temps d'AFFICHAGE (lissage de sortie, comme sur un Larus/LX :
+// l'etat interne reste rapide, seule la valeur restituee est adoucie)
+#define OUT_TAU      0.7f     // s : 0.4 = vif, 1.0 = doux
 
 #define G_MS2        9.80665f
 #define DEG2RAD      0.017453293f
@@ -194,5 +197,9 @@ float VarioFusion_Step(float ax, float ay, float az,
 
   // tant que l'alignement AHRS n'est pas fini -> baro pur (plus sur)
   if (nowMs - startMs < ALIGN_MS) return baroVario;
-  return x[1];
+
+  // lissage de sortie (l'aiguille d'un vrai vario a une inertie ~0.5-1 s)
+  static float out = 0.0f;
+  out += (x[1] - out) * (dt / (OUT_TAU + dt));
+  return out;
 }

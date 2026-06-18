@@ -21,6 +21,7 @@
 #include "lim_link.h"
 #include "VarioFusion.h"
 #include "FlightLog.h"
+#include "GpsLink.h"
 #include <math.h>
 
 // ============================================================
@@ -48,6 +49,7 @@ static uint32_t g_pktCount = 0;
 //  Tourne dans Driver_Loop (core 0, cadence reguliere ~50 Hz).
 // ============================================================
 static volatile float g_varioFused = 0.0f;   // vario fusionne (m/s)
+static volatile float g_varioComp  = 0.0f;   // vario apres compensation GPS (m/s)
 
 // ============================================================
 //  SON VARIO (GPIO0 → MOSFET → buzzer piezo passif)
@@ -153,6 +155,8 @@ static void menu_onRotate(long delta)
       case MENU_SOUND:
         if (delta > 0) g_sinkSound = true;
         else if (delta < 0) g_sinkSound = false;
+        // Envoyer immediatement la commande vers le Calculateur
+        LIM_CMD_SEND(Serial1, g_sinkSound ? LIM_CMD_SINK_SOUND : 0x00);
         break;
     }
     g_menuDirty = true;
@@ -374,14 +378,43 @@ static void Menu_Apply()
   if (delta != 0) lv_obj_scroll_by(objects.item_list, 0, -delta, LV_ANIM_OFF);
 }
 
+// Compensation TE par GPS (V0.7) : vario_comp = vario + (V/g)*dV/dt
+//  V = vitesse sol GPS (recue par WiFi). Sans fix -> passthrough.
+static void Comp_Apply()
+{
+  static uint32_t lastUs = 0;
+  static float    vF = 0.0f, vPrev = 0.0f;
+  float base = isnan(g_varioFused) ? 0.0f : g_varioFused;
+
+  uint32_t nowUs = micros();
+  if (lastUs == 0) { lastUs = nowUs; g_varioComp = base; return; }
+  float dt = (nowUs - lastUs) * 1e-6f;
+  lastUs = nowUs;
+  if (dt <= 0.0f || dt > 0.5f) { g_varioComp = base; return; }
+
+  float term = 0.0f;
+  if (GpsLink_HasFix()) {
+    float v = GpsLink_GroundSpeed();
+    vF += (v - vF) * (dt / (0.5f + dt));     // lissage de la vitesse sol
+    float dVdt = (vF - vPrev) / dt;
+    vPrev = vF;
+    term = (vF / 9.80665f) * dVdt;           // (V/g)*dV/dt
+    if (term >  5.0f) term =  5.0f;          // garde-fous
+    if (term < -5.0f) term = -5.0f;
+  } else {
+    vF = vPrev = 0.0f;                        // reset quand pas de fix
+  }
+  g_varioComp = base + term;
+}
+
 static void Needles_Apply()
 {
   static uint32_t last = 0;
   uint32_t now = millis();
   if (g_menuState != MENU_CLOSED && (now - last) < 160) return;
   last = now;
-  float v  = isnan(g_varioFused) ? 0.0f : g_varioFused;   // aiguille = vario inertiel
-  float vi = isnan(g_varioInt)   ? 0.0f : g_varioInt;
+  float v  = isnan(g_varioComp) ? 0.0f : g_varioComp;     // aiguille = vario compense GPS
+  float vi = isnan(g_varioInt)  ? 0.0f : g_varioInt;
   if (screen_main_state.indicator2)
     lv_meter_set_indicator_value(objects.vario_meter, screen_main_state.indicator2,
                                  (int32_t)(v * 1000.0f));
@@ -394,10 +427,10 @@ static void Needles_Apply()
 static void Sound_Init()
 {
   // Buzzer interne Waveshare = EXIO_PIN8 via TCA9554 (I2C)
-  // Le piezo sonne a sa frequence naturelle quand on le met a HIGH.
-  // On controle uniquement l'ENVELOPPE ON/OFF du bip (pas la frequence).
-  // La vitesse de bip varie avec le vario → son identifiable meme a freq fixe.
-  Set_EXIO(EXIO_PIN8, Low);  // silence au demarrage (deja fait dans Driver_Init)
+  // Desactive : le son est desormais gere par le module PAM8403 sur le Calculateur.
+  Set_EXIO(EXIO_PIN8, Low);  // silence permanent
+  // Envoyer l'etat initial sink sound au Calculateur (Mute par defaut)
+  LIM_CMD_SEND(Serial1, 0x00);
 }
 
 static void Sound_Apply()
@@ -506,7 +539,7 @@ static void Labels_Apply()
   // Vario instantane (arrondi a 0.1 m/s)
   if (objects.lbl_vario) {
     static int lastV = -99999;
-    float v = isnan(g_varioFused) ? 0.0f : g_varioFused;   // affiche = vario inertiel
+    float v = isnan(g_varioComp) ? 0.0f : g_varioComp;     // affiche = vario compense GPS
     int vt = (int)(v * 10.0f + (v >= 0 ? 0.5f : -0.5f));
     if (vt != lastV) {
       lastV = vt;
@@ -596,6 +629,7 @@ void setup()
   Serial.println(">> Menu_LvglSetup"); Menu_LvglSetup();
   Serial.println(">> Link_Init");      Link_Init();
   Serial.println(">> Sound_Init");     Sound_Init();
+  Serial.println(">> GpsLink_Begin");  GpsLink_Begin();
 
   Serial.println(">> setup TERMINE OK");
 }
@@ -604,9 +638,11 @@ void loop()
 {
   Lvgl_Loop();
   Link_Poll();
+  GpsLink_Loop();   // reception NMEA (vitesse sol) par WiFi
+  Comp_Apply();     // compensation TE GPS -> g_varioComp
   Needles_Apply();
   Labels_Apply();
-  Sound_Apply(); // son vario (GPIO0 → buzzer)
+  // Sound_Apply() supprime : son desormais gere par le PAM8403 sur le Calculateur
   Vol_Apply();   // arc volume temporaire (encodeur 2)
   MC_Apply();
   Menu_AutoClose();
@@ -620,9 +656,9 @@ void loop()
   static uint32_t lastDbg = 0;
   if (millis() - lastDbg >= 2000) {
     lastDbg = millis();
-    Serial.printf("[link] trames=%lu ok=%d | baro=%+.2f fus=%+.2f rdy=%d alt=%.0f vol=%d\n",
-                  (unsigned long)g_pktCount, g_linkOk ? 1 : 0,
-                  g_vario, g_varioFused, VarioFusion_Ready() ? 1 : 0,
+    Serial.printf("[link] ok=%d | fus=%+.2f comp=%+.2f | gps=%.1fm/s fix=%d | alt=%.0f vol=%d\n",
+                  g_linkOk ? 1 : 0, g_varioFused, g_varioComp,
+                  GpsLink_GroundSpeed(), GpsLink_HasFix() ? 1 : 0,
                   g_altitude, g_volume);
   }
 

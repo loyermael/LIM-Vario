@@ -21,7 +21,6 @@
 #include "lim_link.h"
 #include "VarioFusion.h"
 #include "FlightLog.h"
-#include "GpsLink.h"
 #include <math.h>
 
 // ============================================================
@@ -50,6 +49,8 @@ static uint32_t g_pktCount = 0;
 // ============================================================
 static volatile float g_varioFused = 0.0f;   // vario fusionne (m/s)
 static volatile float g_varioComp  = 0.0f;   // vario apres compensation GPS (m/s)
+static volatile float g_airspeed   = 0.0f;   // vitesse recue (MS4525 ou vitesse sol GPS)
+static volatile bool  g_gpsOk      = false;  // flag fix GPS valide (recu du calculateur)
 
 // ============================================================
 //  SON VARIO (GPIO0 → MOSFET → buzzer piezo passif)
@@ -263,6 +264,8 @@ static void Link_Poll()
         g_varioInt = p->vario_int;
         g_pressure = p->pressure;
         g_altitude = altitude_from_qnh(g_pressure, g_qnh);
+        g_airspeed = p->airspeed;                          // MS4525 ou vitesse sol GPS
+        g_gpsOk    = (p->flags & LIM_FLAG_GPS_OK) != 0;
         g_linkOk   = true;
         Link_HandleEncoders(p);
       }
@@ -393,8 +396,8 @@ static void Comp_Apply()
   if (dt <= 0.0f || dt > 0.5f) { g_varioComp = base; return; }
 
   float term = 0.0f;
-  if (GpsLink_HasFix()) {
-    float v = GpsLink_GroundSpeed();
+  if (g_gpsOk) {
+    float v = g_airspeed;                    // vitesse sol GPS (recue du calculateur)
     vF += (v - vF) * (dt / (0.5f + dt));     // lissage de la vitesse sol
     float dVdt = (vF - vPrev) / dt;
     vPrev = vF;
@@ -629,7 +632,6 @@ void setup()
   Serial.println(">> Menu_LvglSetup"); Menu_LvglSetup();
   Serial.println(">> Link_Init");      Link_Init();
   Serial.println(">> Sound_Init");     Sound_Init();
-  Serial.println(">> GpsLink_Begin");  GpsLink_Begin();
 
   Serial.println(">> setup TERMINE OK");
 }
@@ -638,8 +640,7 @@ void loop()
 {
   Lvgl_Loop();
   Link_Poll();
-  GpsLink_Loop();   // reception NMEA (vitesse sol) par WiFi
-  Comp_Apply();     // compensation TE GPS -> g_varioComp
+  Comp_Apply();     // compensation TE GPS (vitesse recue du calculateur) -> g_varioComp
   Needles_Apply();
   Labels_Apply();
   // Sound_Apply() supprime : son desormais gere par le PAM8403 sur le Calculateur
@@ -658,7 +659,7 @@ void loop()
     lastDbg = millis();
     Serial.printf("[link] ok=%d | fus=%+.2f comp=%+.2f | gps=%.1fm/s fix=%d | alt=%.0f vol=%d\n",
                   g_linkOk ? 1 : 0, g_varioFused, g_varioComp,
-                  GpsLink_GroundSpeed(), GpsLink_HasFix() ? 1 : 0,
+                  g_airspeed, g_gpsOk ? 1 : 0,
                   g_altitude, g_volume);
   }
 

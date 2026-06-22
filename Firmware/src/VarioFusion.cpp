@@ -195,11 +195,22 @@ float VarioFusion_Step(float ax, float ay, float az,
   kalman_update_acc(aVert);
   if (newBaro && baroOk) kalman_update_alt(altitude_std(p_pa));
 
-  // tant que l'alignement AHRS n'est pas fini -> baro pur (plus sur)
-  if (nowMs - startMs < ALIGN_MS) return baroVario;
+  static bool  aligned = false;
+  static float out     = 0.0f;
+
+  // Pendant l'alignement AHRS -> baro pur (le Kalman se cale mais on ne l'affiche pas)
+  if (nowMs - startMs < ALIGN_MS) { aligned = false; out = baroVario; return baroVario; }
+
+  // Fin d'alignement : on repart d'un Kalman PROPRE -> pas de transitoire
+  // negatif au demarrage (sinon l'accel "fausse" accumulee pendant l'alignement
+  // donne un gros vario negatif qui remonte lentement).
+  if (!aligned) {
+    aligned = true;
+    if (baroOk) kalman_reset(altitude_std(p_pa));
+    out = 0.0f;
+  }
 
   // lissage de sortie (l'aiguille d'un vrai vario a une inertie ~0.5-1 s)
-  static float out = 0.0f;
   out += (x[1] - out) * (dt / (OUT_TAU + dt));
   return out;
 }

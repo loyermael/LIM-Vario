@@ -20,6 +20,8 @@
 #include <ESP32Encoder.h>
 #include "MS4525DO.h"
 #include "lim_link.h"        // protocole partage (../Shared)
+#include "VarioSound.h"
+#include "GpsLink.h"         // GPS via WiFi (AP fiable cote calculateur)
 
 // ---- Broches ----
 #define PIN_SDA   18   // (ancien 21, change car GPIO21 suspecte abimee)
@@ -33,6 +35,17 @@
 #define ENC2_B    27
 #define ENC2_SW   14
 
+// TEST HP : si le BMP est absent, genere un vario synthetique pour
+// entendre le son (bips facon Larus). Mettre a 0 une fois le BMP OK.
+#define SOUND_TEST 1
+
+// Sens des encodeurs : 1 = inverse (si l'encodeur tourne a l'envers)
+#define ENC1_REVERSE 1
+#define ENC2_REVERSE 0
+
+// WiFi GPS : 0 = en pause (pas de point d'acces). 1 = actif.
+#define GPS_WIFI 1
+
 // ---- Capteurs ----
 Adafruit_BMP3XX bmp;
 MS4525DO        ms4525(0x28);
@@ -41,6 +54,9 @@ static bool     hasSpeed = false;
 
 // ---- Encodeurs ----
 ESP32Encoder enc1, enc2;
+
+// ---- Son (Vario) ----
+VarioSound varioSound(23); // Utilise la broche GPIO 23
 
 // ---- Constantes ----
 static const float P0_PA = 101325.0f;
@@ -54,6 +70,7 @@ static float    vario_f   = 0.0f;
 static float    vario_te  = 0.0f;
 static float    vario_int = 0.0f;
 static uint32_t lastUs    = 0;
+static uint32_t bootMs    = 0;   // pour la temporisation de demarrage du vario
 
 static float altitude_from_p(float p_pa) {
   return 44330.0f * (1.0f - powf(p_pa / P0_PA, 0.1902949f));
@@ -98,10 +115,60 @@ void setup() {
   pinMode(ENC2_SW, INPUT_PULLUP);
 
   Serial.println("Pret. Envoi trame UART vers l'ecran...");
+  bootMs = millis();
+  
+  // --- Son Vario ---
+  varioSound.begin();
+  varioSound.setSinkAlarm(false); // Par défaut: mode sink sound mute (pas de son en descente)
+
+  // --- GPS via WiFi (point d'acces "LIM-Vario") ---
+#if GPS_WIFI
+  GpsLink_Begin();
+#endif
+
   lastUs = micros();
 }
 
+// ---- Reception des commandes retour de l'ecran (lim_cmd_t) ----
+// La liaison UART est full-duplex : pendant que le Calculateur envoie
+// les trames vario, l'ecran envoie ses commandes (changement Sink Snd. etc.)
+static void Cmd_Poll() {
+  static uint8_t buf[sizeof(lim_cmd_t)];
+  static size_t  idx = 0;
+  while (Serial2.available()) {
+    uint8_t b = (uint8_t)Serial2.read();
+    if (idx == 0) { if (b == LIM_CMD_SYNC0) buf[idx++] = b; continue; }
+    if (idx == 1) {
+      if      (b == LIM_CMD_SYNC1) buf[idx++] = b;
+      else if (b == LIM_CMD_SYNC0) { buf[0] = b; idx = 1; }
+      else                          idx = 0;
+      continue;
+    }
+    buf[idx++] = b;
+    if (idx == sizeof(buf)) {
+      idx = 0;
+      const lim_cmd_t* c = (const lim_cmd_t*)buf;
+      if (lim_cmd_check(c)) {
+        bool sinkOn = (c->cmd & LIM_CMD_SINK_SOUND) != 0;
+        varioSound.setSinkAlarm(sinkOn);
+        Serial.printf("[cmd] SinkSound=%s\n", sinkOn ? "Full" : "Mute");
+      }
+    }
+  }
+}
+
 void loop() {
+  // Reception des commandes retour de l'ecran (Sink Sound on/off, etc.)
+  Cmd_Poll();
+
+  // Le son doit etre rafraichi le plus souvent possible (non limite a 50Hz)
+  varioSound.tick();
+
+  // Reception GPS (NMEA UDP) - le plus souvent possible
+#if GPS_WIFI
+  GpsLink_Loop();
+#endif
+
   // Cadence ~50 Hz
   uint32_t nowUs = micros();
   float dt = (nowUs - lastUs) * 1e-6f;
@@ -129,25 +196,40 @@ void loop() {
   }
 
   if (gotBaro) {
-    // --- Filtres / vario ---
     if (isnan(alt_f)) alt_f = alt;
-    float alt_prev = alt_f;
-    alt_f = ema(alt_f, alt, dt, 0.30f);
-    float vario_raw = (alt_f - alt_prev) / dt;
-    vario_f = ema(vario_f, vario_raw, dt, 0.80f);
+    // Temporisation de demarrage (~2 s) : le BMP + ses filtres se stabilisent.
+    // Sinon la 1ere lecture cree un faux pic que l'integrateur 20 s garde
+    // longtemps (vario tres negatif au demarrage qui remonte lentement).
+    if (millis() - bootMs < 2000) {
+      alt_f = alt;                          // suit l'altitude, sans deriver
+      vario_f = vario_te = vario_int = 0.0f;
+      spd_f = ema(spd_f, spd_raw, dt, 0.40f);
+    } else {
+      float alt_prev = alt_f;
+      alt_f = ema(alt_f, alt, dt, 0.30f);
+      float vario_raw = (alt_f - alt_prev) / dt;
+      vario_f = ema(vario_f, vario_raw, dt, 0.80f);
 
-    // Compensation TE (sans effet si pas de vitesse : dV/dt = 0)
-    float spd_prev = spd_f;
-    spd_f = ema(spd_f, spd_raw, dt, 0.40f);
-    float dVdt   = (spd_f - spd_prev) / dt;
-    float te_raw = vario_f + (spd_f / G) * dVdt;
-    vario_te = ema(vario_te, te_raw, dt, 0.80f);
-
-    vario_int = ema(vario_int, vario_te, dt, 20.0f);
+      // Compensation TE (sans effet si pas de vitesse : dV/dt = 0)
+      float spd_prev = spd_f;
+      spd_f = ema(spd_f, spd_raw, dt, 0.40f);
+      float dVdt   = (spd_f - spd_prev) / dt;
+      float te_raw = vario_f + (spd_f / G) * dVdt;
+      vario_te = ema(vario_te, te_raw, dt, 0.80f);
+      vario_int = ema(vario_int, vario_te, dt, 20.0f);
+    }
+    // Met à jour la vitesse verticale pour le son
+    varioSound.setVz(vario_te);
   } else {
     // Pas de capteur valide -> zero (jamais de NaN qui rendrait l'aiguille folle)
     vario_f = vario_te = vario_int = 0.0f;
     alt_f = 0.0f;
+#if SOUND_TEST
+    // TEST HP : vario synthetique oscillant (-1.5 .. +2.5 m/s sur ~8 s)
+    // -> on entend les bips qui montent/accelerent (montee) puis le silence.
+    float testVz = 0.5f + 2.0f * sinf(6.2832f * (millis() % 8000) / 8000.0f);
+    varioSound.setVz(testVz);
+#endif
   }
 
   // --- Construction + envoi de la trame vers l'ecran ---
@@ -155,14 +237,17 @@ void loop() {
   pkt.pressure   = p_pa;                            // l'ecran calcule l'altitude avec le QNH
   pkt.vario      = vario_te;                        // = baro si pas de MS4525
   pkt.vario_int  = vario_int;
-  pkt.airspeed   = spd_f;
-  pkt.enc1_count = (int32_t)(enc1.getCount() / 4); // crans
-  pkt.enc2_count = (int32_t)(enc2.getCount() / 4);
+  // airspeed = MS4525 si present, sinon vitesse sol GPS (pour la compensation cote ecran)
+  bool gpsOk     = GpsLink_HasFix();
+  pkt.airspeed   = hasSpeed ? spd_f : (gpsOk ? GpsLink_GroundSpeed() : 0.0f);
+  pkt.enc1_count = (ENC1_REVERSE ? -1 : 1) * (int32_t)(enc1.getCount() / 4); // crans
+  pkt.enc2_count = (ENC2_REVERSE ? -1 : 1) * (int32_t)(enc2.getCount() / 4);
   pkt.enc1_btn   = (digitalRead(ENC1_SW) == LOW) ? 1 : 0;
   pkt.enc2_btn   = (digitalRead(ENC2_SW) == LOW) ? 1 : 0;
   uint8_t flags = 0;
   if (bmpOk)    flags |= LIM_FLAG_BMP_OK;
   if (hasSpeed) flags |= LIM_FLAG_SPD_OK;
+  if (gpsOk)    flags |= LIM_FLAG_GPS_OK;
   lim_finalize(&pkt, flags);
   Serial2.write((const uint8_t*)&pkt, sizeof(pkt));
 

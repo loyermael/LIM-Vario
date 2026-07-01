@@ -1,34 +1,33 @@
 /* ============================================================
- *  L!M Vario - Fusion IMU + baro "facon Larus"
+ *  L!M Vario - IMU + Barometric Sensor Fusion
  *
- *  Architecture copiee du projet Larus (GPL-3.0) :
- *    1) AHRS Mahony (gyro + accelero) -> attitude continue
- *       => acceleration VERTICALE terre, valable en virage
- *    2) Kalman 4 etats { altitude, vario, accel, biais_accel }
- *       => le biais de l'IMU est estime en permanence
- *       (cf. larus-breeze/sw_algorithms_lib NAV_Algorithms/KalmanVario)
+ *  Estimation and filtering algorithms:
+ *    1) Mahony AHRS (gyro + accelerometer) -> continuous attitude
+ *       => EARTH-FRAME vertical acceleration, accurate during coordinated turns
+ *    2) 4-State Kalman Filter { altitude, vario, accel, accel_bias }
+ *       => IMU vertical bias is continuously estimated online
  *
- *  Difference avec Larus : nos gains Kalman sont calcules en
- *  ligne (covariance propagee), donc dt peut varier (~50 Hz).
+ *  Filter state matrices are propagated dynamically based on
+ *  the real-time loop delta interval (dt ~50 Hz).
  *
- *  Appeler VarioFusion_Step() a cadence reguliere (~50 Hz),
- *  idealement depuis une tache temps-reel (Driver_Loop core 0).
+ *  Call VarioFusion_Step() at a regular cadence (~50 Hz),
+ *  ideally inside a real-time driver task (Driver_Loop on Core 0).
  * ============================================================ */
 #pragma once
 #include <stdbool.h>
 
-// Etape de fusion. Retourne le vario fusionne (m/s).
-//  ax..az  : accelero en g          (repere carte)
-//  gx..gz  : gyro en degres/seconde (repere carte)
-//  p_pa    : pression statique (Pa) recue du calculateur
-//  newBaro : true si une NOUVELLE trame baro est arrivee
-//  baroVario : vario baro du calculateur (fallback si fusion pas prete)
+// Sensor fusion iteration. Returns the fused vertical speed (m/s).
+//  ax..az    : Accelerometer reading in g (board body frame)
+//  gx..gz    : Gyroscope reading in deg/sec (board body frame)
+//  p_pa      : Static pressure in Pa received from the calculator unit
+//  newBaro   : true if a NEW barometric telemetry packet arrived this step
+//  baroVario : Calculator baro vario (fallback if fusion AHRS not yet aligned)
 float VarioFusion_Step(float ax, float ay, float az,
                        float gx, float gy, float gz,
                        float p_pa, bool newBaro, float baroVario);
 
-// true quand l'AHRS est aligne et le Kalman initialise
+// Returns true when AHRS orientation is aligned and Kalman state initialized
 bool VarioFusion_Ready(void);
 
-// derniere acceleration verticale terre (m/s^2, gravite retiree) - pour le log
+// Latest earth-frame vertical acceleration (m/s^2, gravity removed) - for SD data log
 float VarioFusion_GetVertAccel(void);

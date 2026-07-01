@@ -14,7 +14,23 @@
 #include "SD_MMC.h"
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Update.h>
 #include "RTC_PCF85063.h"
+#include "CompanionApp_HTML.h"
+
+extern int g_brightness;
+extern int g_tonePitch;
+extern uint8_t g_waveform;
+extern int g_toneSpread;
+extern int g_varioRange;
+extern uint8_t g_varioFilter;
+extern uint8_t g_avgClimb;
+extern bool g_helperEnable;
+extern uint8_t g_uAlt;
+extern uint8_t g_uSpeed;
+extern uint8_t g_uVert;
+extern void Set_Backlight(uint8_t Light);
+extern void Config_Save();
 
 #define LOG_DIR        "/logs"
 #define LOG_PERIOD_MS  100        // 10 Hz
@@ -99,6 +115,29 @@ void FlightLog_Init(void)
 bool FlightLog_Active(void)       { return g_sdOk && g_flying && !g_srvOn; }
 bool FlightLog_ServerActive(void) { return g_srvOn; }
 
+void FlightLog_AddError(const char* module, const char* msg)
+{
+  Serial.printf("[ERR:%s] %s\n", module ? module : "SYS", msg ? msg : "");
+  if (!g_sdOk || g_srvOn) return;
+  if (!SD_MMC.exists(LOG_DIR)) SD_MMC.mkdir(LOG_DIR);
+
+  datetime_t t;
+  PCF85063_Read_Time(&t);
+  char path[] = LOG_DIR "/ERRORS.LOG";
+  File f = SD_MMC.open(path, FILE_APPEND);
+  if (f) {
+    if (t.year >= 2020 && t.year <= 2099) {
+      f.printf("[%04d-%02d-%02d %02d:%02d:%02d] [%s] %s\n",
+               t.year, t.month, t.day, t.hour, t.minute, t.second,
+               module ? module : "SYS", msg ? msg : "");
+    } else {
+      f.printf("[%lums] [%s] %s\n", (unsigned long)millis(),
+               module ? module : "SYS", msg ? msg : "");
+    }
+    f.close();
+  }
+}
+
 void FlightLog_Tick(float p_pa, float alt_m, float varioBaro,
                     float varioFused, float accelVert, int volume)
 {
@@ -154,27 +193,83 @@ void FlightLog_Tick(float p_pa, float alt_m, float varioBaro,
 // ------------------------------------------------------------
 //  Serveur WiFi de recuperation des logs
 // ------------------------------------------------------------
-static void srv_list(void)
+static void srv_app(void)
 {
-  String html = "<html><head><meta name=viewport content='width=device-width'>"
-                "<title>L!M Vario - Logs</title></head><body>"
-                "<h2>L!M Vario - Journaux de vol</h2><ul>";
+  g_server.send_P(200, "text/html", COMPANION_APP_HTML);
+}
+
+static void srv_api_files(void)
+{
+  String json = "[";
   File dir = SD_MMC.open(LOG_DIR);
   if (dir) {
     File f = dir.openNextFile();
+    bool first = true;
     while (f) {
+      if (!first) json += ",";
+      first = false;
       String name = String(f.name());
-      html += "<li><a href='/dl?f=" + name + "'>" + name + "</a> ("
-            + String(f.size() / 1024) + " ko) "
-            + "<a href='/del?f=" + name + "' "
-              "onclick=\"return confirm('Supprimer ?')\">[X]</a></li>";
+      int slashIdx = name.lastIndexOf('/');
+      if (slashIdx >= 0) name = name.substring(slashIdx + 1);
+      json += "{\"name\":\"" + name + "\",\"size\":" + String(f.size()) + "}";
       f = dir.openNextFile();
     }
     dir.close();
   }
-  html += "</ul><p>Appui long encodeur 2 : couper le WiFi.</p></body></html>";
-  g_server.send(200, "text/html", html);
+  json += "]";
+  g_server.send(200, "application/json", json);
 }
+
+static void srv_api_config_get(void)
+{
+  String json = "{\"bright\":" + String(g_brightness) +
+                ",\"pitch\":" + String(g_tonePitch) +
+                ",\"wave\":" + String(g_waveform) +
+                ",\"spread\":" + String(g_toneSpread) +
+                ",\"range\":" + String(g_varioRange) +
+                ",\"filter\":" + String(g_varioFilter) +
+                ",\"avg\":" + String(g_avgClimb) +
+                ",\"helper\":" + String(g_helperEnable ? 1 : 0) +
+                ",\"ualt\":" + String(g_uAlt) +
+                ",\"uspeed\":" + String(g_uSpeed) +
+                ",\"uvert\":" + String(g_uVert) + "}";
+  g_server.send(200, "application/json", json);
+}
+
+static void srv_api_config_post(void)
+{
+  if (g_server.hasArg("plain")) {
+    String body = g_server.arg("plain");
+    auto getInt = [&](const char* key, int def) -> int {
+      int idx = body.indexOf(key);
+      if (idx < 0) return def;
+      return body.substring(idx + strlen(key)).toInt();
+    };
+    if (body.indexOf("\"bright\":") >= 0) {
+      g_brightness = getInt("\"bright\":", g_brightness);
+      if (g_brightness < 0) g_brightness = 0;
+      if (g_brightness > 20) g_brightness = 20;
+      Set_Backlight((uint8_t)(g_brightness * 5));
+    }
+    if (body.indexOf("\"pitch\":") >= 0) {
+      g_tonePitch = getInt("\"pitch\":", g_tonePitch);
+      if (g_tonePitch < 200) g_tonePitch = 200;
+      if (g_tonePitch > 1500) g_tonePitch = 1500;
+    }
+    if (body.indexOf("\"wave\":") >= 0) g_waveform = getInt("\"wave\":", g_waveform);
+    if (body.indexOf("\"spread\":") >= 0) g_toneSpread = getInt("\"spread\":", g_toneSpread);
+    if (body.indexOf("\"range\":") >= 0) g_varioRange = getInt("\"range\":", g_varioRange);
+    if (body.indexOf("\"filter\":") >= 0) g_varioFilter = getInt("\"filter\":", g_varioFilter);
+    if (body.indexOf("\"avg\":") >= 0) g_avgClimb = getInt("\"avg\":", g_avgClimb);
+    if (body.indexOf("\"helper\":") >= 0) g_helperEnable = (getInt("\"helper\":", 1) == 1);
+    if (body.indexOf("\"ualt\":") >= 0) g_uAlt = getInt("\"ualt\":", g_uAlt);
+    if (body.indexOf("\"uspeed\":") >= 0) g_uSpeed = getInt("\"uspeed\":", g_uSpeed);
+    if (body.indexOf("\"uvert\":") >= 0) g_uVert = getInt("\"uvert\":", g_uVert);
+    Config_Save();
+  }
+  g_server.send(200, "application/json", "{\"status\":\"ok\"}");
+}
+
 
 static void srv_download(void)
 {
@@ -184,7 +279,8 @@ static void srv_download(void)
   File f = SD_MMC.open(path, FILE_READ);
   if (!f) { g_server.send(404, "text/plain", "introuvable"); return; }
   g_server.sendHeader("Content-Disposition", "attachment; filename=" + name);
-  g_server.streamFile(f, "text/csv");
+  String mime = name.endsWith(".csv") ? "text/csv" : "text/plain";
+  g_server.streamFile(f, mime);
   f.close();
 }
 
@@ -197,6 +293,34 @@ static void srv_delete(void)
   g_server.send(303);
 }
 
+static void srv_update_post(void)
+{
+  g_server.sendHeader("Connection", "close");
+  g_server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
+  ESP.restart();
+}
+
+static void srv_update_upload(void)
+{
+  HTTPUpload& upload = g_server.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    Serial.printf("[OTA] Update Start: %s\n", upload.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+      Update.printError(Serial);
+    }
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) {
+      Serial.printf("[OTA] Update Success: %u bytes\n", upload.totalSize);
+    } else {
+      Update.printError(Serial);
+    }
+  }
+}
+
 void FlightLog_ServerToggle(void)
 {
   if (!g_srvOn) {
@@ -204,9 +328,13 @@ void FlightLog_ServerToggle(void)
     if (g_flying) { file_close(); g_flying = false; g_groundRef = NAN; }
     WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASS);
-    g_server.on("/",    srv_list);
-    g_server.on("/dl",  srv_download);
-    g_server.on("/del", srv_delete);
+    g_server.on("/",            srv_app);
+    g_server.on("/api/files",   srv_api_files);
+    g_server.on("/api/config",  HTTP_GET,  srv_api_config_get);
+    g_server.on("/api/config",  HTTP_POST, srv_api_config_post);
+    g_server.on("/dl",          srv_download);
+    g_server.on("/del",         srv_delete);
+    g_server.on("/update",      HTTP_POST, srv_update_post, srv_update_upload);
     g_server.begin();
     g_srvOn = true;
     Serial.printf("[log] WiFi ON : %s / %s -> http://%s\n",

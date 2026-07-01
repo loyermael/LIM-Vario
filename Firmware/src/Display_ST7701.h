@@ -41,7 +41,7 @@
 #define ESP_PANEL_LCD_RGB_TIMING_VPW              (3)
 #define ESP_PANEL_LCD_RGB_TIMING_VBP              (8)
 #define ESP_PANEL_LCD_RGB_TIMING_VFP              (8)
-#define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM           (1)     // 1 = mode rapide (debug serie)
+#define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM           (1)     // 1 = fast mode (serial debug) ; le direct_mode+vsync (2) provoque un gel intermittent, cf LVGL_Driver.cpp
 #define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE         (ESP_PANEL_LCD_WIDTH * 10)     // Bounce buffer size in bytes. This function is used to avoid screen drift.
                                                           // To enable the bounce buffer, set it to a non-zero value. Typically set to `ESP_PANEL_LCD_WIDTH * 10`
                                                           // The size of the Bounce Buffer must satisfy `width_of_lcd * height_of_lcd = size_of_buffer * N`,

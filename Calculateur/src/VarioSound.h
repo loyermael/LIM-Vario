@@ -4,36 +4,44 @@
 
 class VarioSound {
 public:
-    // Constructeur avec la broche choisie pour le signal audio (PWM/tone)
+    // Constructor with the GPIO pin designated for audio output (DAC/PWM)
     VarioSound(uint8_t pin);
 
-    // Initialisation (à appeler dans setup si besoin)
+    // Hardware initialization (to be called inside setup)
     void begin();
 
-    // Met à jour la vitesse verticale (Vz) en m/s
+    // Updates vertical speed (Vz) in m/s
     void setVz(float vz);
 
-    // Active ou désactive le son de descente (sink sound mute)
+    // Enables or disables sink alarm audio (sink sound mute/full)
     void setSinkAlarm(bool enable);
 
-    // Fonction à appeler le plus souvent possible dans loop()
+    // Software volume control 0..20 (PWM amplitude scale; eliminates hardware potentiometer)
+    void setVolume(uint8_t vol);
+
+    // --- Sound menu settings (received from display unit via lim_scfg_t) ---
+    void setCenterFreq(float hz);   // Tone pitch : Base frequency (Hz)
+    void setSpread(uint8_t s);      // Tone spread : 0..10 (frequency variation intensity vs vario)
+    void setWaveform(uint8_t w);    // Waveform : 0=Sine 1=Square 2=Triangle
+
+    // Main update tick routine to be invoked periodically inside loop()
     void tick();
 
 private:
     uint8_t _pin;
     float _vz;
     bool _sinkAlarmEnabled;
+    uint8_t _vol = 12;  // volume level 0..20
 
-    // Seuils par défaut
+    // Default acoustic thresholds
     float _thresholdClimb = 0.2f;
     float _thresholdSink = -0.5f;
 
-    // Variables pour le calcul basé sur l'algorithme Larus
-    float _sndCenterFreq = 659.0f;     // Fréquence de base à 0 m/s (Mi 5)
-    float _sndExpMul = 0.138629f;      // Multiplicateur exponentiel (double tous les 5 m/s)
-    uint32_t _sndDutyCycleMult = 200000; // Constante pour la durée des bips/pauses
+    // Larus tone generation algorithm parameters
+    float _sndCenterFreq = 500.0f;
+    float _sndExpMul = 0.138629f;
 
-    // Etat de l'automate
+    // Acoustic state machine state
     enum State {
         SILENCE,
         BEEP_ON,
@@ -45,9 +53,9 @@ private:
     uint32_t _lastTickMs;
     uint32_t _nextTransitionMs;
     
-    // Fréquence courante calculée
+    // Calculated current output tone frequency
     uint32_t _currentFreq;
-    // Durée courante du bip calculée
+    // Calculated current beep duration
     uint32_t _currentDuration;
     
     void stopTone();

@@ -1,69 +1,69 @@
 /* ============================================================
- *  L!M Vario - Fusion IMU + baro "facon Larus"
- *  (voir VarioFusion.h pour l'architecture)
+ *  L!M Vario - IMU + Barometric Sensor Fusion
+ *  (see VarioFusion.h for system architecture details)
  * ============================================================ */
 #include "VarioFusion.h"
 #include <Arduino.h>
 #include <math.h>
 
 // ------------------------------------------------------------
-//  Reglages
+//  Configuration Tuning Parameters
 // ------------------------------------------------------------
-// AHRS Mahony
-#define KP_ALIGN     8.0f     // gain fort pendant l'alignement initial
-#define KP_RUN       0.35f    // gain faible en vol (l'accel "ment" en virage)
-#define ALIGN_MS     3000     // duree d'alignement au demarrage
-// Kalman (bruits ; a ajuster en vol si besoin)
-#define Q_ACC        1.0f     // (m/s^2)^2/s : agilite du vario (grand = + vif/nerveux)
-#define Q_BIAS       1e-4f    // derive lente du biais accelero
-#define R_ALT        0.25f    // m^2        : bruit altitude baro (~0.5 m)
-#define R_ACC        0.36f    // (m/s^2)^2  : bruit accel verticale (~0.6 m/s^2)
-// Constante de temps d'AFFICHAGE (lissage de sortie, comme sur un Larus/LX :
-// l'etat interne reste rapide, seule la valeur restituee est adoucie)
-#define OUT_TAU      0.7f     // s : 0.4 = vif, 1.0 = doux
+// Mahony AHRS
+#define KP_ALIGN     8.0f     // High proportional gain during initial alignment
+#define KP_RUN       0.35f    // Low proportional gain during flight (accelerometer vector deflects in turns)
+#define ALIGN_MS     3000     // Initial alignment duration at startup (milliseconds)
+// Kalman Filter (Process and measurement noise covariances; tune in flight if needed)
+#define Q_ACC        1.0f     // (m/s^2)^2/s : Vario agility / responsiveness (higher = faster response)
+#define Q_BIAS       1e-4f    // Slow drift rate of vertical accelerometer bias
+#define R_ALT        0.25f    // m^2        : Barometric altitude measurement noise (~0.5 m std dev)
+#define R_ACC        0.36f    // (m/s^2)^2  : Vertical acceleration noise (~0.6 m/s^2 std dev)
+// DISPLAY time constant (output smoothing filter, similar to Larus/LX instruments:
+// internal Kalman state tracks rapidly, while output needle display is gently smoothed)
+#define OUT_TAU      0.7f     // seconds : 0.4 = responsive/snappy, 1.0 = smooth/calm
 
 #define G_MS2        9.80665f
 #define DEG2RAD      0.017453293f
 
 // ------------------------------------------------------------
-//  Etat
+//  Internal State Variables
 // ------------------------------------------------------------
-static float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;  // quaternion corps->terre
+static float q0 = 1.0f, q1 = 0.0f, q2 = 0.0f, q3 = 0.0f;  // Body-to-earth orientation quaternion
 static bool     ahrsInit  = false;
 static uint32_t startMs   = 0;
 static uint32_t lastUs    = 0;
 
-// Kalman : x = { h, v, a, biais } ; P covariance
+// Kalman Filter state vector: x = { h, v, a, bias } ; covariance matrix P
 static float    x[4];
 static float    P[4][4];
 static bool     kalInit = false;
 
-static float altitude_std(float p_pa)   // altitude pression standard (QNH-independant)
+static float altitude_std(float p_pa)   // Standard pressure altitude (QNH-independent)
 {
   return 44330.0f * (1.0f - powf(p_pa / 101325.0f, 0.1902949f));
 }
 
 // ------------------------------------------------------------
-//  AHRS Mahony (correction gravite seule, sans magnetometre)
+//  Mahony AHRS (Gravity vector correction only, no magnetometer)
 // ------------------------------------------------------------
 static void mahony_update(float gx, float gy, float gz,   // rad/s
-                          float ax, float ay, float az,   // g (norme qcq)
+                          float ax, float ay, float az,   // g (arbitrary norm)
                           float kp, float dt)
 {
   float n = sqrtf(ax*ax + ay*ay + az*az);
-  if (n > 0.5f && n < 1.5f) {            // corrige seulement si |a| ~ 1 g
+  if (n > 0.5f && n < 1.5f) {            // Apply correction only if |a| ~ 1 g
     ax /= n; ay /= n; az /= n;
-    // gravite estimee dans le repere corps (3e ligne de R transposee)
+    // Estimated gravity vector in body frame (3rd row of transposed R matrix)
     float vx = 2.0f*(q1*q3 - q0*q2);
     float vy = 2.0f*(q0*q1 + q2*q3);
     float vz = q0*q0 - q1*q1 - q2*q2 + q3*q3;
-    // erreur = a_mesure x g_estimee
+    // Error = measured acceleration cross estimated gravity
     float ex = ay*vz - az*vy;
     float ey = az*vx - ax*vz;
     float ez = ax*vy - ay*vx;
     gx += kp * ex;  gy += kp * ey;  gz += kp * ez;
   }
-  // integration du quaternion : dq = 0.5 * q * omega
+  // Quaternion integration: dq = 0.5 * q * omega
   float halfdt = 0.5f * dt;
   float dq0 = (-q1*gx - q2*gy - q3*gz) * halfdt;
   float dq1 = ( q0*gx + q2*gz - q3*gy) * halfdt;
@@ -74,18 +74,18 @@ static void mahony_update(float gx, float gy, float gz,   // rad/s
   q0 /= qn; q1 /= qn; q2 /= qn; q3 /= qn;
 }
 
-// acceleration verticale terre (m/s^2, + vers le haut, gravite retiree)
+// Earth-frame vertical acceleration (m/s^2, + upwards, gravity removed)
 static float vertical_accel(float ax, float ay, float az)
 {
   float ez = 2.0f*(q1*q3 - q0*q2)*ax
            + 2.0f*(q2*q3 + q0*q1)*ay
-           + (q0*q0 - q1*q1 - q2*q2 + q3*q3)*az;  // en g, ~+1 a l'arret
+           + (q0*q0 - q1*q1 - q2*q2 + q3*q3)*az;  // in g units, ~+1 at rest
   return (ez - 1.0f) * G_MS2;
 }
 
 // ------------------------------------------------------------
-//  Kalman 4 etats (structure Larus, covariance en ligne)
-//  Mesures : z_alt = h    |  z_acc = a + biais
+//  4-State Kalman Filter (online covariance propagation)
+//  Measurements : z_alt = h    |  z_acc = a + bias
 // ------------------------------------------------------------
 static void kalman_reset(float h0)
 {
@@ -120,7 +120,7 @@ static void kalman_predict(float dt)
   P[3][3] += Q_BIAS * dt;
 }
 
-// mesure altitude : H = [1 0 0 0]
+// Altitude measurement update : H = [1 0 0 0]
 static void kalman_update_alt(float z)
 {
   float S = P[0][0] + R_ALT;
@@ -134,7 +134,7 @@ static void kalman_update_alt(float z)
     for (int j = 0; j < 4; j++) P[i][j] -= K[i] * HP[j];
 }
 
-// mesure accel : H = [0 0 1 1]  (la mesure contient le biais)
+// Acceleration measurement update : H = [0 0 1 1]  (measurement includes bias)
 static void kalman_update_acc(float z)
 {
   float S = P[2][2] + P[3][3] + 2.0f*P[2][3] + R_ACC;
@@ -149,7 +149,7 @@ static void kalman_update_acc(float z)
 }
 
 // ------------------------------------------------------------
-//  API
+//  API Implementation
 // ------------------------------------------------------------
 static float g_lastAVert = 0.0f;
 
@@ -167,7 +167,7 @@ float VarioFusion_Step(float ax, float ay, float az,
   uint32_t nowUs = micros();
   uint32_t nowMs = millis();
 
-  // --- premiere passe : init quaternion grossiere depuis l'accelero ---
+  // --- First pass: rough quaternion initialization from accelerometer ---
   if (!ahrsInit) {
     ahrsInit = true;
     startMs  = nowMs;
@@ -179,13 +179,13 @@ float VarioFusion_Step(float ax, float ay, float az,
   lastUs = nowUs;
   if (dt <= 0.0f || dt > 0.2f) return kalInit ? x[1] : baroVario;
 
-  // --- AHRS : Kp fort au sol (alignement), faible ensuite ---
+  // --- AHRS: High Kp on bench (alignment), low Kp afterwards ---
   float kp = (nowMs - startMs < ALIGN_MS) ? KP_ALIGN : KP_RUN;
   mahony_update(gx * DEG2RAD, gy * DEG2RAD, gz * DEG2RAD, ax, ay, az, kp, dt);
   float aVert = vertical_accel(ax, ay, az);
   g_lastAVert = aVert;
 
-  // --- Kalman ---
+  // --- Kalman Filter ---
   bool baroOk = (p_pa > 30000.0f && p_pa < 110000.0f);
   if (!kalInit) {
     if (baroOk) kalman_reset(altitude_std(p_pa));
@@ -198,19 +198,18 @@ float VarioFusion_Step(float ax, float ay, float az,
   static bool  aligned = false;
   static float out     = 0.0f;
 
-  // Pendant l'alignement AHRS -> baro pur (le Kalman se cale mais on ne l'affiche pas)
+  // During AHRS alignment -> pure baro vario (Kalman tracks in background without outputting)
   if (nowMs - startMs < ALIGN_MS) { aligned = false; out = baroVario; return baroVario; }
 
-  // Fin d'alignement : on repart d'un Kalman PROPRE -> pas de transitoire
-  // negatif au demarrage (sinon l'accel "fausse" accumulee pendant l'alignement
-  // donne un gros vario negatif qui remonte lentement).
+  // End of alignment: reset Kalman cleanly -> prevents negative startup transient
+  // (otherwise accumulated orientation errors during alignment result in artificial negative lift).
   if (!aligned) {
     aligned = true;
     if (baroOk) kalman_reset(altitude_std(p_pa));
     out = 0.0f;
   }
 
-  // lissage de sortie (l'aiguille d'un vrai vario a une inertie ~0.5-1 s)
+  // Output smoothing filter (mechanical needle inertia ~0.5-1.0 s)
   out += (x[1] - out) * (dt / (OUT_TAU + dt));
   return out;
 }

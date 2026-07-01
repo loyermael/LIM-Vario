@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Simulateur Fidèle L!M Vario - ESP32-S3 Waveshare 480x480</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0c0c0e;
+      --panel: #18181c;
+      --accent: #fbd500;
+      --text: #ffffff;
+      --border: #2a2a32;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Montserrat', 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      user-select: none;
+    }
+    h1 {
+      color: var(--accent);
+      margin: 0 0 5px 0;
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+    p.sub {
+      color: #999;
+      font-size: 13px;
+      margin: 0 0 20px 0;
+    }
+    .simulator-container {
+      display: flex;
+      gap: 45px;
+      align-items: center;
+      background: var(--panel);
+      padding: 30px 40px;
+      border-radius: 24px;
+      box-shadow: 0 15px 35px rgba(0,0,0,0.7);
+      border: 1px solid #222228;
+    }
+    /* Écran rond physique exact : 480x480 */
+    .screen-bezel {
+      width: 500px;
+      height: 500px;
+      background: #050507;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: inset 0 0 20px rgba(255,255,255,0.08), 0 10px 30px rgba(0,0,0,0.9);
+      border: 6px solid #1a1a20;
+      position: relative;
+    }
+    .screen {
+      width: 480px;
+      height: 480px;
+      background-color: #000000;
+      /* Utilisation de la véritable image de fond du projet L!M Vario */
+      background-image: url('UI/PNG/Vario_Backgroud.png');
+      background-size: cover;
+      background-position: center;
+      border-radius: 50%;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Aiguille Vario en vol normal */
+    .needle {
+      position: absolute;
+      width: 6px;
+      height: 220px;
+      background: linear-gradient(to top, transparent 50%, #ffffff 50%, #ff2222 100%);
+      top: 20px;
+      left: 237px;
+      transform-origin: 3px 220px;
+      transform: rotate(28deg);
+      transition: transform 0.4s ease;
+      z-index: 2;
+    }
+
+    /* Centre du cadran / Planeur TH */
+    .center-glider {
+      position: absolute;
+      width: 64px;
+      height: 64px;
+      top: 208px;
+      left: 208px;
+      background-image: url('UI/PNG/glider_th.png');
+      background-size: contain;
+      background-repeat: no-repeat;
+      z-index: 3;
+    }
+
+    /* Calque Éditeur InfoBox (masque les aiguilles en dessous) */
+    .infobox-layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 480px; height: 480px;
+      background-color: #000000;
+      background-image: url('UI/PNG/Vario_Backgroud.png');
+      background-size: cover;
+      z-index: 10;
+      display: none;
+    }
+
+    /* Bandeau Mode Climb/Cruise */
+    .mode-badge {
+      position: absolute;
+      top: 12px;
+      left: 170px;
+      width: 140px;
+      text-align: center;
+      background: rgba(251, 213, 0, 0.2);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 0;
+      border-radius: 12px;
+      letter-spacing: 1px;
+      z-index: 15;
+    }
+
+    /* 6 Info Boxes + 1 Zone Centrale */
+    .ib-frame {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-radius: 12px;
+      border: 1px solid #555555;
+      background-color: rgba(0, 0, 0, 0);
+      box-sizing: border-box;
+      transition: all 0.15s ease;
+      z-index: 12;
+      padding: 2px;
+    }
+    .ib-val {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      line-height: 1.1;
+      text-align: center;
+    }
+    .ib-lbl {
+      font-size: 9px;
+      color: #aaaaaa;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+
+    /* Coordonnées exactes pour 480x480 */
+    #ib-0 { top: 35px;  left: 150px; width: 180px; height: 44px; } /* Haut Sup */
+    #ib-1 { top: 85px;  left: 140px; width: 200px; height: 50px; } /* Haut Inf */
+    #ib-2 { top: 145px; left: 140px; width: 200px; height: 95px; border-style: dashed; } /* Zone Centrale 2 */
+    #ib-3 { top: 248px; left: 140px; width: 200px; height: 54px; } /* Bas Sup */
+    #ib-4 { top: 310px; left: 150px; width: 180px; height: 48px; } /* Bas Inf */
+    #ib-5 { top: 220px; left: 16px;  width: 115px; height: 52px; } /* Latérale Gauche */
+
+    /* Style Sélection : Bordure Jaune & Fond Blanc Transparent 40/255 (~16%) */
+    .ib-frame.selected {
+      border: 2px solid var(--accent);
+      background-color: rgba(255, 255, 255, 0.16);
+      box-shadow: 0 0 15px rgba(251, 213, 0, 0.45);
+    }
+
+    /* Menus EEZ Studio 480x480 (Setup, Mode List, Choice List) */
+    .menu-layer {
+      position: absolute;
+      top: 0; left: 0;
+      width: 480px; height: 480px;
+      background: #08080a;
+      z-index: 25;
+      display: none;
+      flex-direction: column;
+      align-items: center;
+    }
+    .menu-header {
+      margin-top: 35px;
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: 2px;
+      border-bottom: 2px solid var(--accent);
+      padding-bottom: 5px;
+      width: 240px;
+      text-align: center;
+    }
+    .menu-list-viewport {
+      position: relative;
+      width: 480px;
+      height: 380px;
+      overflow: hidden;
+      margin-top: 10px;
+    }
+    /* Cadre jaune central fixe (selection_frame_1) */
+    .selection-frame-1 {
+      position: absolute;
+      top: 160px;
+      left: 60px;
+      width: 360px;
+      height: 48px;
+      border: 2px solid var(--accent);
+      background-color: rgba(255, 255, 255, 0.16);
+      border-radius: 10px;
+      pointer-events: none;
+      z-index: 5;
+    }
+    .menu-items-container {
+      position: absolute;
+      width: 480px;
+      top: 165px; /* Aligné sur selection_frame_1 */
+      transition: top 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .menu-item {
+      height: 55px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 26px;
+      font-weight: 600;
+      color: #ffffff;
+      transition: color 0.15s;
+    }
+    .menu-item.active {
+      color: var(--accent);
+      font-weight: 700;
+    }
+    .menu-item.red { color: #ff3333; }
+    .menu-item.gray { color: #777777; }
+
+    /* Contrôles Encodeur Rotatif */
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      width: 280px;
+    }
+    .controls h2 {
+      font-size: 18px;
+      color: var(--accent);
+      margin: 0;
+    }
+    .btn-row {
+      display: flex;
+      gap: 12px;
+    }
+    button {
+      flex: 1;
+      background: #25252c;
+      color: white;
+      border: 1px solid #3a3a45;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    button:hover {
+      background: #32323c;
+      border-color: var(--accent);
+    }
+    button:active { transform: scale(0.95); }
+    button.primary {
+      background: var(--accent);
+      color: #000;
+      border: none;
+    }
+    button.primary:hover { background: #ffe033; }
+
+    .status-panel {
+      background: #111115;
+      border: 1px solid #2a2a35;
+      padding: 14px;
+      border-radius: 12px;
+      font-size: 13px;
+    }
+    .status-panel b { color: var(--accent); }
+  </style>
+</head>
+<body>
+
+  <h1>Simulateur Vario L!M (UI EEZ Studio 480x480)</h1>
+  <p class="sub">Reproduction exacte du firmware : 6 zones, gestion Climb/Cruise, listes à défilement vertical</p>
+
+  <div class="simulator-container">
+    <div class="screen-bezel">
+      <div class="screen">
+        <div class="needle"></div>
+        <div class="center-glider"></div>
+
+        <!-- Calque Éditeur InfoBox (masque les aiguilles) -->
+        <div class="infobox-layer" id="infobox-layer">
+          <div class="mode-badge" id="mode-badge">MODE: CLIMB</div>
+
+          <div class="ib-frame" id="ib-0"><div class="ib-val" id="val-0">+1.5 m/s</div><div class="ib-lbl" id="lbl-0">VARIO</div></div>
+          <div class="ib-frame" id="ib-1"><div class="ib-val" id="val-1">+1.2 m/s</div><div class="ib-lbl" id="lbl-1">AVG</div></div>
+          
+          <!-- Zone Centrale 2 -->
+          <div class="ib-frame" id="ib-2"><div class="ib-val" id="val-2" style="font-size:16px; color:var(--accent);">THERMAL ASSIST</div><div class="ib-lbl" id="lbl-2">CENTER ZONE</div></div>
+
+          <div class="ib-frame" id="ib-3"><div class="ib-val" id="val-3">1450 m</div><div class="ib-lbl" id="lbl-3">ALT BARO</div></div>
+          <div class="ib-frame" id="ib-4"><div class="ib-val" id="val-4">+450 m</div><div class="ib-lbl" id="lbl-4">GAIN</div></div>
+          <div class="ib-frame" id="ib-5"><div class="ib-val" id="val-5">NW 25</div><div class="ib-lbl" id="lbl-5">WIND</div></div>
+        </div>
+
+        <!-- Menu Setup / Mode List / Choice List -->
+        <div class="menu-layer" id="menu-layer">
+          <div class="menu-header" id="menu-title">SETTINGS</div>
+          <div class="menu-list-viewport">
+            <div class="selection-frame-1"></div>
+            <div class="menu-items-container" id="menu-items"></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Contrôles Encodeur -->
+    <div class="controls">
+      <h2>🎛️ Encodeur 1 rotatif</h2>
+      <p style="font-size:12px; color:#aaa; margin:0;">Utilisez les flèches Haut/Bas du clavier et Entrée/Échap.</p>
+      
+      <div class="btn-row">
+        <button onclick="rotate(-1)">↺ Gauche (-1)</button>
+        <button onclick="rotate(1)">↻ Droite (+1)</button>
+      </div>
+      <button class="primary" onclick="press()">🔴 Clic Encodeur (Valider)</button>
+      <button onclick="back()">↩️ Back / Appui long</button>
+
+      <div class="status-panel">
+        <b>État du Menu :</b> <span id="st-state">Menu Settings</span><br>
+        <b>Profil Actif :</b> <span id="st-prof">Climb Mode</span><br>
+        <b>Sélection :</b> <span id="st-sel">Info Boxes</span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Données des grandeurs (15 choix standards + 4 choix centraux)
+    const STD_ITEMS = [
+      { name: "Inst. Vario",    abbr: "VARIO",    val: "+1.5 m/s" },
+      { name: "Avg. Vario",     abbr: "AVG",      val: "+1.2 m/s" },
+      { name: "MacCready",      abbr: "MC",       val: "2.0 m/s" },
+      { name: "Baro Alt.",      abbr: "ALT BARO", val: "1450 m" },
+      { name: "GPS Alt.",       abbr: "ALT GPS",  val: "1460 m" },
+      { name: "Airspeed (IAS)", abbr: "IAS",      val: "115 km/h" },
+      { name: "Ground Speed",   abbr: "GS",       val: "122 km/h" },
+      { name: "Time",           abbr: "TIME",     val: "14:32:05" },
+      { name: "Flight Time",    abbr: "FLT TIME", val: "02:15" },
+      { name: "Wind",           abbr: "WIND",     val: "NW 25 km/h" },
+      { name: "Climb Gain",     abbr: "GAIN",     val: "+450 m" },
+      { name: "Flight Level",   abbr: "FL",       val: "FL 065" },
+      { name: "Glide Ratio",    abbr: "L/D",      val: "38" },
+      { name: "Disabled",       abbr: "OFF",      val: "--", style:"gray" },
+      { name: "Back",           abbr: "",         val: "",   style:"red" }
+    ];
+
+    const CENTER_ITEMS = [
+      { name: "Thermal Helper", val: "THERMAL ASSIST" },
+      { name: "Wind Direction", val: "WIND ARROW" },
+      { name: "Disabled",       val: "OFF", style:"gray" },
+      { name: "Back",           val: "",    style:"red" }
+    ];
+
+    // Profils NVS persistés
+    let cfgClimb  = { zones: [0, 1, 3, 10, 9], center: 0 }; // Vario, Avg, Alt, Gain, Wind / Thermal Helper
+    let cfgCruise = { zones: [0, 2, 3, 12, 6], center: 1 }; // Vario, MC, Alt, L/D, GS / Wind Direction
+
+    let currentMode = "SETTINGS"; // SETTINGS, MODE_SELECT, ZONE_SELECT, CHOICE_LIST
+    let activeProfile = "CLIMB";  // CLIMB or CRUISE
+    let menuSel = 3;              // Index dans le menu (par défaut sur Info Boxes)
+    let zoneSel = 0;              // 0..5
+    let choiceSel = 0;
+
+    const SETTINGS_MENU = ["Display", "Sound", "Vario", "Info Boxes", "System", "Units", "Glider infos", "Profile", "Exit"];
+    const MODE_MENU     = ["Climb InfoBoxes", "Cruise InfoBoxes", "Back"];
+
+    function getCfg() { return activeProfile === "CLIMB" ? cfgClimb : cfgCruise; }
+
+    function updateUI() {
+      const menuLayer   = document.getElementById('menu-layer');
+      const ibLayer     = document.getElementById('infobox-layer');
+      const menuTitle   = document.getElementById('menu-title');
+      const menuContainer = document.getElementById('menu-items');
+
+      // 1. GESTION DES CALQUES
+      if (currentMode === "ZONE_SELECT") {
+        menuLayer.style.display = "none";
+        ibLayer.style.display   = "block";
+        document.getElementById('mode-badge').textContent = `MODE: ${activeProfile}`;
+        
+        // Mise à jour des 6 cadres
+        const cfg = getCfg();
+        // Mappage des indices de zone [0, 1, 3, 4, 5] dans cfg.zones[0..4]
+        const zoneMap = [0, 1, null, 2, 3, 4];
+        for (let i = 0; i < 6; i++) {
+          const el = document.getElementById(`ib-${i}`);
+          if (i === zoneSel) el.classList.add('selected'); else el.classList.remove('selected');
+
+          if (i === 2) { // Zone Centrale
+            document.getElementById('val-2').textContent = CENTER_ITEMS[cfg.center].val;
+          } else {
+            const idx = zoneMap[i];
+            const item = STD_ITEMS[cfg.zones[idx]];
+            document.getElementById('val-' + i).textContent = item.val;
+            document.getElementById('lbl-' + i).textContent = item.abbr;
+          }
+        }
+        document.getElementById('st-state').textContent = "Sélection de Zone";
+        document.getElementById('st-sel').textContent = `Zone ${zoneSel} (${zoneSel===2?'Centre':stdName(zoneSel)})`;
+      } 
+      else {
+        menuLayer.style.display = "flex";
+        ibLayer.style.display   = "none";
+        menuContainer.innerHTML = "";
+
+        let items = [];
+        let sel = 0;
+
+        if (currentMode === "SETTINGS") {
+          menuTitle.textContent = "SETTINGS";
+          items = SETTINGS_MENU.map((txt, idx) => ({ name: txt, style: txt==="Exit"?"red":"" }));
+          sel = menuSel;
+          document.getElementById('st-state').textContent = "Menu Settings";
+          document.getElementById('st-sel').textContent = SETTINGS_MENU[sel];
+        } 
+        else if (currentMode === "MODE_SELECT") {
+          menuTitle.textContent = "INFO BOXES";
+          items = MODE_MENU.map((txt) => ({ name: txt, style: txt==="Back"?"red":"" }));
+          sel = menuSel;
+          document.getElementById('st-state').textContent = "Choix Profil";
+          document.getElementById('st-sel').textContent = MODE_MENU[sel];
+        }
+        else if (currentMode === "CHOICE_LIST") {
+          menuTitle.textContent = zoneSel === 2 ? "CENTER ZONE" : `ZONE ${zoneSel}`;
+          items = zoneSel === 2 ? CENTER_ITEMS : STD_ITEMS;
+          sel = choiceSel;
+          document.getElementById('st-state').textContent = "Choix Grandeur";
+          document.getElementById('st-sel').textContent = items[sel].name;
+        }
+
+        // Construction du menu vertical à 55px par item
+        items.forEach((it, idx) => {
+          const div = document.createElement('div');
+          div.className = `menu-item ${it.style||''} ${idx === sel ? 'active' : ''}`;
+          div.textContent = it.name;
+          menuContainer.appendChild(div);
+        });
+
+        // Animation de translation Y pour centrer l'item sélectionné dans selection_frame_1
+        menuContainer.style.top = (160 - sel * 55) + "px";
+      }
+      document.getElementById('st-prof').textContent = activeProfile;
+    }
+
+    function stdName(z) {
+      const zm = [0, 1, null, 2, 3, 4];
+      return STD_ITEMS[getCfg().zones[zm[z]]].name;
+    }
+
+    function rotate(dir) {
+      if (currentMode === "SETTINGS") menuSel = (menuSel + dir + SETTINGS_MENU.length) % SETTINGS_MENU.length;
+      else if (currentMode === "MODE_SELECT") menuSel = (menuSel + dir + MODE_MENU.length) % MODE_MENU.length;
+      else if (currentMode === "ZONE_SELECT") zoneSel = (zoneSel + dir + 6) % 6;
+      else if (currentMode === "CHOICE_LIST") {
+        const max = zoneSel === 2 ? CENTER_ITEMS.length : STD_ITEMS.length;
+        choiceSel = (choiceSel + dir + max) % max;
+      }
+      updateUI();
+    }
+
+    function press() {
+      if (currentMode === "SETTINGS") {
+        if (SETTINGS_MENU[menuSel] === "Info Boxes") {
+          currentMode = "MODE_SELECT"; menuSel = 0;
+        }
+      } 
+      else if (currentMode === "MODE_SELECT") {
+        if (menuSel === 0) { activeProfile = "CLIMB"; currentMode = "ZONE_SELECT"; zoneSel = 0; }
+        else if (menuSel === 1) { activeProfile = "CRUISE"; currentMode = "ZONE_SELECT"; zoneSel = 0; }
+        else { currentMode = "SETTINGS"; menuSel = 3; }
+      }
+      else if (currentMode === "ZONE_SELECT") {
+        currentMode = "CHOICE_LIST";
+        if (zoneSel === 2) choiceSel = getCfg().center;
+        else {
+          const zm = [0, 1, null, 2, 3, 4];
+          choiceSel = getCfg().zones[zm[zoneSel]];
+        }
+      }
+      else if (currentMode === "CHOICE_LIST") {
+        const max = zoneSel === 2 ? CENTER_ITEMS.length : STD_ITEMS.length;
+        if (choiceSel < max - 1) { // Pas sur Back
+          if (zoneSel === 2) getCfg().center = choiceSel;
+          else {
+            const zm = [0, 1, null, 2, 3, 4];
+            getCfg().zones[zm[zoneSel]] = choiceSel;
+          }
+        }
+        currentMode = "ZONE_SELECT";
+      }
+      updateUI();
+    }
+
+    function back() {
+      if (currentMode === "CHOICE_LIST") currentMode = "ZONE_SELECT";
+      else if (currentMode === "ZONE_SELECT") { currentMode = "MODE_SELECT"; menuSel = 0; }
+      else if (currentMode === "MODE_SELECT") { currentMode = "SETTINGS"; menuSel = 3; }
+      updateUI();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === "ArrowUp" || e.key === "ArrowLeft") rotate(-1);
+      if (e.key === "ArrowDown" || e.key === "ArrowRight") rotate(1);
+      if (e.key === "Enter") press();
+      if (e.key === "Escape" || e.key === "Backspace") back();
+    });
+
+    updateUI();
+  </script>
+</body>
+</html>

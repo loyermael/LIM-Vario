@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Simulateur L!M Vario - Éditeur d'InfoBoxes (6 Zones)</title>
+  <style>
+    :root {
+      --bg: #121214;
+      --panel: #1e1e24;
+      --accent: #fbd500;
+      --text: #ffffff;
+    }
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      margin: 0;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    h1 {
+      color: var(--accent);
+      margin-bottom: 5px;
+      font-size: 24px;
+    }
+    p.sub {
+      color: #aaaaaa;
+      font-size: 14px;
+      margin-bottom: 25px;
+    }
+    .simulator-container {
+      display: flex;
+      gap: 40px;
+      align-items: center;
+      background: var(--panel);
+      padding: 30px 40px;
+      border-radius: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    /* Écran rond 480x480 mis à l'échelle à 420x420 */
+    .screen-bezel {
+      width: 440px;
+      height: 440px;
+      background: #08080a;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: inset 0 0 15px rgba(255,255,255,0.1), 0 5px 20px rgba(0,0,0,0.8);
+      border: 4px solid #2a2a32;
+      position: relative;
+    }
+    .screen {
+      width: 420px;
+      height: 420px;
+      background: #000000;
+      border-radius: 50%;
+      position: relative;
+      overflow: hidden;
+      /* Simulation des graduations vario */
+      background-image: radial-gradient(circle at center, #0a0a0d 62%, transparent 63%),
+                        conic-gradient(from 180deg at 50% 50%, #1a3a1a 0deg 45deg, #000 45deg 135deg, #3a1a1a 135deg 180deg, #1a3a1a 180deg 225deg, #000 225deg 315deg, #3a1a1a 315deg 360deg);
+    }
+    /* Centre du cadran */
+    .center-hub {
+      position: absolute;
+      width: 300px;
+      height: 300px;
+      background: #050507;
+      border-radius: 50%;
+      top: 60px;
+      left: 60px;
+      border: 2px solid #1a1a22;
+    }
+    /* Graduations -/+5 */
+    .tick {
+      position: absolute;
+      color: #888;
+      font-weight: bold;
+      font-size: 16px;
+    }
+    .t-0r { top: 200px; right: 12px; }
+    .t-0l { top: 200px; left: 12px; }
+    .t-p5 { top: 15px; left: 200px; color: #4CAF50; }
+    .t-m5 { bottom: 15px; left: 200px; color: #F44336; }
+
+    /* Aiguille vario */
+    .needle {
+      position: absolute;
+      width: 4px;
+      height: 200px;
+      background: linear-gradient(to top, transparent 50%, #ffffff 50%, #ff3333 100%);
+      top: 10px;
+      left: 208px;
+      transform-origin: 2px 200px;
+      transform: rotate(25deg);
+      transition: transform 0.5s ease;
+      z-index: 2;
+    }
+
+    /* Info Boxes sur l'écran (6 zones) */
+    .infobox {
+      position: absolute;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      border-radius: 10px;
+      border: 1px solid #555555;
+      background-color: rgba(0, 0, 0, 0);
+      box-sizing: border-box;
+      transition: all 0.2s;
+      z-index: 5;
+      padding: 2px;
+    }
+    .ib-val {
+      font-size: 17px;
+      font-weight: 700;
+      color: #fff;
+    }
+    .ib-title {
+      font-size: 9px;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Positions des 6 boîtes */
+    #ib-0 { top: 28px; left: 130px; width: 160px; height: 38px; }  /* Haut Sup */
+    #ib-1 { top: 72px; left: 120px; width: 180px; height: 42px; }  /* Haut Inf */
+    #ib-2 { top: 218px; left: 120px; width: 180px; height: 46px; } /* Milieu */
+    #ib-3 { top: 272px; left: 120px; width: 180px; height: 42px; } /* Bas Sup */
+    #ib-4 { top: 320px; left: 130px; width: 160px; height: 38px; } /* Bas Inf */
+    #ib-5 { top: 200px; left: 14px; width: 98px; height: 46px; }   /* Latérale Gauche */
+
+    /* État sélectionné : Bordure jaune et FOND BLANC TRANSPARENT (comme selection_frame) */
+    .infobox.selected {
+      border: 2px solid var(--accent);
+      background-color: rgba(255, 255, 255, 0.18); /* Blanc transparent */
+      box-shadow: 0 0 12px rgba(251, 213, 0, 0.4);
+    }
+
+    /* Modale de choix */
+    .choice-modal {
+      position: absolute;
+      width: 230px;
+      height: 280px;
+      top: 70px;
+      left: 95px;
+      background: #111115;
+      border: 2px solid var(--accent);
+      border-radius: 16px;
+      z-index: 10;
+      display: none;
+      flex-direction: column;
+      padding: 8px;
+      box-sizing: border-box;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.9);
+    }
+    .choice-item {
+      padding: 6px 10px;
+      font-size: 15px;
+      border-radius: 6px;
+      text-align: center;
+      color: #ccc;
+    }
+    .choice-item.active {
+      background: var(--accent);
+      color: #000;
+      font-weight: bold;
+    }
+
+    /* Menu Setup Overlay simulé */
+    .setup-overlay {
+      position: absolute;
+      top: 60px;
+      left: 60px;
+      width: 300px;
+      height: 300px;
+      background: #0e0e12;
+      border: 3px solid var(--accent);
+      border-radius: 50%;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    .setup-title {
+      font-size: 14px;
+      color: var(--accent);
+      margin-bottom: 15px;
+      text-transform: uppercase;
+    }
+    .setup-item {
+      padding: 6px 20px;
+      font-size: 18px;
+      border-radius: 6px;
+      margin: 2px 0;
+    }
+    .setup-item.active {
+      background: #333;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+
+    /* Contrôles Encodeur */
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 15px;
+      width: 260px;
+    }
+    .controls h2 {
+      font-size: 18px;
+      color: var(--accent);
+      margin: 0 0 5px 0;
+    }
+    .btn-group {
+      display: flex;
+      gap: 10px;
+    }
+    button {
+      flex: 1;
+      background: #2a2a35;
+      color: white;
+      border: 1px solid #444;
+      padding: 12px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    button:hover {
+      background: #3a3a48;
+      border-color: var(--accent);
+    }
+    button:active {
+      transform: scale(0.96);
+    }
+    button.primary {
+      background: var(--accent);
+      color: #000;
+      border: none;
+    }
+    button.primary:hover {
+      background: #ffd822;
+    }
+    .explanation {
+      margin-top: 30px;
+      max-width: 750px;
+      background: #18181d;
+      padding: 20px 25px;
+      border-radius: 12px;
+      border-left: 4px solid var(--accent);
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+  <h1>Simulateur Interactif - L!M Vario InfoBoxes (6 Zones)</h1>
+  <p class="sub">Testez la navigation par encodeur rotatif sur les 6 cadres d'InfoBoxes</p>
+
+  <div class="simulator-container">
+    <div class="screen-bezel">
+      <div class="screen">
+        <span class="tick t-p5">+5</span>
+        <span class="tick t-m5">-5</span>
+        <span class="tick t-0r">0</span>
+        <span class="tick t-0l">0</span>
+        <div class="needle"></div>
+        <div class="center-hub"></div>
+
+        <!-- 6 Info Boxes -->
+        <div class="infobox" id="ib-0">
+          <div class="ib-val" id="ib-val-0">+1.5 m/s</div>
+          <div class="ib-title" id="ib-lbl-0">Vario Inst.</div>
+        </div>
+        <div class="infobox" id="ib-1">
+          <div class="ib-val" id="ib-val-1">+1.2 m/s</div>
+          <div class="ib-title" id="ib-lbl-1">Vario Int.</div>
+        </div>
+        <div class="infobox" id="ib-2">
+          <div class="ib-val" id="ib-val-2">1450 m</div>
+          <div class="ib-title" id="ib-lbl-2">Altitude QNH</div>
+        </div>
+        <div class="infobox" id="ib-3">
+          <div class="ib-val" id="ib-val-3">112 km/h</div>
+          <div class="ib-title" id="ib-lbl-3">Vitesse Sol</div>
+        </div>
+        <div class="infobox" id="ib-4">
+          <div class="ib-val" id="ib-val-4">38</div>
+          <div class="ib-title" id="ib-lbl-4">Finesse L/D</div>
+        </div>
+        <div class="infobox" id="ib-5">
+          <div class="ib-val" id="ib-val-5">88 %</div>
+          <div class="ib-title" id="ib-lbl-5">Batterie</div>
+        </div>
+
+        <!-- Modale Choix Grandeur -->
+        <div class="choice-modal" id="choice-modal">
+          <div class="choice-item">Vario inst.</div>
+          <div class="choice-item">Vario int.</div>
+          <div class="choice-item">Altitude</div>
+          <div class="choice-item">Vitesse sol</div>
+          <div class="choice-item">Finesse</div>
+          <div class="choice-item">Temps vol</div>
+          <div class="choice-item">Batterie</div>
+          <div class="choice-item">Désactivé</div>
+        </div>
+
+        <!-- Setup Menu Overlay -->
+        <div class="setup-overlay" id="setup-overlay">
+          <div class="setup-title">Settings</div>
+          <div class="setup-item">Display</div>
+          <div class="setup-item">System</div>
+          <div class="setup-item active">Info Boxes</div>
+          <div class="setup-item">Units</div>
+          <div class="setup-item">About</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Encodeur Virtuel -->
+    <div class="controls">
+      <h2>🎛️ Encodeur 1 (Menu)</h2>
+      <p style="font-size: 13px; color: #aaa; margin-top: 0;">Utilisez ces boutons ou les flèches du clavier / Entrée.</p>
+      
+      <div class="btn-group">
+        <button onclick="rotate(-1)">↺ Tourner Gauche (-1)</button>
+        <button onclick="rotate(1)">↻ Tourner Droite (+1)</button>
+      </div>
+      <button class="primary" onclick="press()">🔴 Clic Encodeur (Validation)</button>
+      <button onclick="back()">↩️ Appui Long / Back</button>
+
+      <div style="margin-top: 15px; background: #111; padding: 12px; border-radius: 8px; font-size: 13px;">
+        <span style="color: var(--accent); font-weight: bold;">État actuel :</span><br>
+        <span id="state-desc">Menu Setup (Info Boxes sélectionné)</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="explanation">
+    <h3 style="color: var(--accent); margin-top: 0;">Style visuel (Bordure Jaune & Fond Blanc Transparent)</h3>
+    <p>Comme pour les <code>selection_frame</code> du menu principal, lorsqu'une InfoBox est survolée par l'encodeur, le code applique :</p>
+    <ul>
+      <li><b>Bordure :</b> Jaune <code>#FBD500</code> (épaisseur 2 px).</li>
+      <li><b>Fond :</b> Blanc <code>#FFFFFF</code> avec une opacité de <code>40/255</code> (soit ~16% transparent).</li>
+    </ul>
+  </div>
+
+  <script>
+    const METRICS = [
+      { name: "Vario Inst.", val: "+1.5 m/s" },
+      { name: "Vario Int.", val: "+1.2 m/s" },
+      { name: "Altitude QNH", val: "1450 m" },
+      { name: "Vitesse Sol", val: "112 km/h" },
+      { name: "Finesse L/D", val: "38" },
+      { name: "Temps Vol", val: "02:14" },
+      { name: "Batterie", val: "88 %" },
+      { name: "", val: "" }
+    ];
+
+    let mode = "SETUP"; // SETUP, SELECT, CHOOSE
+    let zoneSel = 0;
+    let chooseSel = 0;
+    let config = [0, 1, 2, 3, 4, 6]; // Indices initiaux pour les 6 zones
+
+    function updateUI() {
+      const setupOverlay = document.getElementById('setup-overlay');
+      const choiceModal = document.getElementById('choice-modal');
+      const stateDesc = document.getElementById('state-desc');
+
+      if (mode === "SETUP") {
+        setupOverlay.style.display = "flex";
+        choiceModal.style.display = "none";
+        stateDesc.textContent = "Menu Setup (Appuyez sur Clic pour éditer les Info Boxes)";
+      } else if (mode === "SELECT") {
+        setupOverlay.style.display = "none";
+        choiceModal.style.display = "none";
+        stateDesc.textContent = `Mode Sélection (Zone ${zoneSel} sélectionnée en jaune/blanc)`;
+      } else if (mode === "CHOOSE") {
+        setupOverlay.style.display = "none";
+        choiceModal.style.display = "flex";
+        stateDesc.textContent = `Choix de la grandeur pour la Zone ${zoneSel}`;
+      }
+
+      // Mise à jour des 6 cadres
+      for (let i = 0; i < 6; i++) {
+        const box = document.getElementById(`ib-${i}`);
+        if (mode === "SELECT" && i === zoneSel) {
+          box.classList.add('selected');
+        } else {
+          box.classList.remove('selected');
+        }
+        document.getElementById(`ib-val-${i}`).textContent = METRICS[config[i]].val;
+        document.getElementById(`ib-lbl-${i}`).textContent = METRICS[config[i]].name;
+      }
+
+      // Mise à jour de la liste modale
+      const items = choiceModal.querySelectorAll('.choice-item');
+      items.forEach((item, idx) => {
+        if (idx === chooseSel) item.classList.add('active');
+        else item.classList.remove('active');
+      });
+    }
+
+    function rotate(dir) {
+      if (mode === "SELECT") {
+        zoneSel = (zoneSel + dir + 6) % 6;
+      } else if (mode === "CHOOSE") {
+        chooseSel = (chooseSel + dir + 8) % 8;
+      }
+      updateUI();
+    }
+
+    function press() {
+      if (mode === "SETUP") {
+        mode = "SELECT";
+      } else if (mode === "SELECT") {
+        chooseSel = config[zoneSel];
+        mode = "CHOOSE";
+      } else if (mode === "CHOOSE") {
+        config[zoneSel] = chooseSel;
+        mode = "SELECT";
+      }
+      updateUI();
+    }
+
+    function back() {
+      if (mode === "CHOOSE") {
+        mode = "SELECT";
+      } else if (mode === "SELECT") {
+        mode = "SETUP";
+      }
+      updateUI();
+    }
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === "ArrowLeft" || e.key === "ArrowUp") rotate(-1);
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") rotate(1);
+      if (e.key === "Enter") press();
+      if (e.key === "Escape" || e.key === "Backspace") back();
+    });
+
+    updateUI();
+  </script>
+</body>
+</html>

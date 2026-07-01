@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="620" viewBox="0 0 880 620" font-family="Arial, sans-serif">
+<rect x="0" y="0" width="880" height="620" fill="#ffffff"/>
+<text x="20" y="26" font-size="16" fill="#1a4971">Schema 2/2 — Logique : ESP32 x2, capteurs, GPS FLARM, audio</text>
+<text x="20" y="46" font-size="11" fill="#6b7280">Les etiquettes de meme nom sont reliees (labels globaux, comme dans KiCad).</text>
+
+<!-- U2 Calculateur -->
+<rect x="70" y="80" width="180" height="380" rx="6" fill="#eaf2fb" stroke="#2b6cb0" stroke-width="1.5"/>
+<text x="160" y="106" font-size="14" fill="#1a4971" text-anchor="middle">U2 — ESP32</text>
+<text x="160" y="124" font-size="11" fill="#1f2937" text-anchor="middle">Calculateur</text>
+
+<!-- U2 alim (gauche) -->
+<line x1="70" y1="150" x2="48" y2="150" stroke="#1f2937" stroke-width="1.5"/>
+<polygon points="46,143 6,143 -2,150 6,157 46,157" transform="translate(2,0)" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/>
+<text x="26" y="154" font-size="11" fill="#b45309" text-anchor="middle">+5V</text>
+<line x1="70" y1="185" x2="48" y2="185" stroke="#1f2937" stroke-width="1.5"/>
+<rect x="6" y="176" width="44" height="18" rx="3" fill="#f3f4f6" stroke="#1f2937" stroke-width="1.2"/>
+<text x="28" y="189" font-size="11" fill="#1f2937" text-anchor="middle">GND</text>
+<line x1="70" y1="220" x2="48" y2="220" stroke="#1f2937" stroke-width="1.5"/>
+<polygon points="46,213 6,213 -2,220 6,227 46,227" transform="translate(2,0)" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/>
+<text x="26" y="224" font-size="10" fill="#b45309" text-anchor="middle">+3V3</text>
+<text x="74" y="223" font-size="9" fill="#6b7280">sortie</text>
+
+<!-- U2 signaux (droite) : pin -> tag -->
+<!-- helper layout : stub a x=250..276, tag a 280..372 -->
+<g font-size="11">
+<line x1="250" y1="150" x2="276" y2="150" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="140" width="96" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="328" y="154" fill="#1a4971" text-anchor="middle">G18 · SDA</text>
+<line x1="250" y1="180" x2="276" y2="180" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="170" width="96" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="328" y="184" fill="#1a4971" text-anchor="middle">G19 · SCL</text>
+<line x1="250" y1="210" x2="276" y2="210" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="200" width="96" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="328" y="214" fill="#1a4971" text-anchor="middle">G17 · TELEM</text>
+<line x1="250" y1="240" x2="276" y2="240" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="230" width="96" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="328" y="244" fill="#1a4971" text-anchor="middle">G16 · CMD</text>
+<line x1="250" y1="270" x2="276" y2="270" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="260" width="96" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="328" y="274" fill="#1a4971" text-anchor="middle">G23 · GPS_RX</text>
+<line x1="250" y1="300" x2="276" y2="300" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="290" width="96" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="328" y="304" fill="#1a4971" text-anchor="middle">G22 · GPS_TX</text>
+<line x1="250" y1="330" x2="276" y2="330" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="320" width="96" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="328" y="334" fill="#1a4971" text-anchor="middle">G25 · AUDIO</text>
+<line x1="250" y1="390" x2="276" y2="390" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="380" width="120" height="20" rx="4" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.2"/><text x="340" y="394" fill="#374151" text-anchor="middle">G32/33/4 · ENC1</text>
+<line x1="250" y1="420" x2="276" y2="420" stroke="#1f2937" stroke-width="1.5"/><rect x="280" y="410" width="120" height="20" rx="4" fill="#f3f4f6" stroke="#6b7280" stroke-width="1.2"/><text x="340" y="424" fill="#374151" text-anchor="middle">G26/27/14 · ENC2</text>
+</g>
+
+<!-- U7 Ecran -->
+<rect x="610" y="70" width="210" height="120" rx="6" fill="#eaf2fb" stroke="#2b6cb0" stroke-width="1.5"/>
+<text x="715" y="96" font-size="14" fill="#1a4971" text-anchor="middle">U7 — Ecran</text>
+<text x="715" y="114" font-size="11" fill="#1f2937" text-anchor="middle">ESP32-S3 + LCD</text>
+<g font-size="11">
+<line x1="610" y1="135" x2="584" y2="135" stroke="#1f2937" stroke-width="1.5"/><polygon points="582,128 542,128 534,135 542,142 582,142" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/><text x="562" y="139" fill="#b45309" text-anchor="middle">+5V</text>
+<line x1="610" y1="160" x2="584" y2="160" stroke="#1f2937" stroke-width="1.5"/><rect x="540" y="151" width="44" height="18" rx="3" fill="#f3f4f6" stroke="#1f2937" stroke-width="1.2"/><text x="562" y="164" fill="#1f2937" text-anchor="middle">GND</text>
+</g>
+<text x="615" y="178" font-size="9" fill="#6b7280">G44=RX1  G43=TX1</text>
+<line x1="610" y1="183" x2="540" y2="183" stroke="#1f2937" stroke-width="1.2"/>
+<rect x="452" y="150" width="86" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="495" y="164" font-size="11" fill="#1a4971" text-anchor="middle">TELEM (G44)</text>
+<rect x="452" y="178" width="86" height="20" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="495" y="192" font-size="11" fill="#1a4971" text-anchor="middle">CMD (G43)</text>
+
+<!-- Capteurs I2C -->
+<rect x="640" y="240" width="200" height="64" rx="6" fill="#eaf2fb" stroke="#2b6cb0" stroke-width="1.5"/>
+<text x="740" y="266" font-size="12" fill="#1a4971" text-anchor="middle">U3 BMP388 (0x77)</text>
+<text x="740" y="284" font-size="10" fill="#1f2937" text-anchor="middle">statique -&gt; altitude</text>
+<rect x="640" y="320" width="200" height="64" rx="6" fill="#eaf2fb" stroke="#2b6cb0" stroke-width="1.5"/>
+<text x="740" y="346" font-size="12" fill="#1a4971" text-anchor="middle">U4 MS4525 (0x28)</text>
+<text x="740" y="364" font-size="10" fill="#1f2937" text-anchor="middle">P.haut=Pitot P.bas=stat.</text>
+<!-- tags I2C communs -->
+<g font-size="10">
+<rect x="540" y="244" width="80" height="18" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="580" y="257" fill="#1a4971" text-anchor="middle">SDA · SCL</text>
+<polygon points="618,283 568,283 560,291 568,299 618,299" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/><text x="592" y="295" fill="#b45309" text-anchor="middle">+3V3</text>
+<line x1="640" y1="272" x2="620" y2="272" stroke="#1f2937" stroke-width="1.2"/>
+<line x1="640" y1="291" x2="618" y2="291" stroke="#1f2937" stroke-width="1.2"/>
+<line x1="640" y1="352" x2="620" y2="352" stroke="#1f2937" stroke-width="1.2"/>
+</g>
+<!-- pull-ups -->
+<rect x="500" y="244" width="14" height="34" rx="2" fill="#ffffff" stroke="#1f2937" stroke-width="1.2"/>
+<text x="478" y="264" font-size="9" fill="#1f2937">R1·R2</text>
+<text x="470" y="276" font-size="9" fill="#6b7280">4k7</text>
+
+<!-- U5 MAX3232 -->
+<rect x="380" y="470" width="170" height="120" rx="6" fill="#eaf2fb" stroke="#2b6cb0" stroke-width="1.5"/>
+<text x="465" y="496" font-size="13" fill="#1a4971" text-anchor="middle">U5 — MAX3232</text>
+<text x="465" y="513" font-size="10" fill="#1f2937" text-anchor="middle">RS232 &lt;-&gt; TTL 3V3</text>
+<!-- cote TTL (gauche) -->
+<g font-size="10">
+<line x1="380" y1="505" x2="360" y2="505" stroke="#1f2937" stroke-width="1.2"/><rect x="270" y="496" width="90" height="18" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="315" y="509" fill="#1a4971" text-anchor="middle">GPS_TX→T1IN</text>
+<line x1="380" y1="530" x2="360" y2="530" stroke="#1f2937" stroke-width="1.2"/><rect x="270" y="521" width="90" height="18" rx="4" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="315" y="534" fill="#1a4971" text-anchor="middle">GPS_RX←R1OUT</text>
+<line x1="380" y1="555" x2="360" y2="555" stroke="#1f2937" stroke-width="1.2"/><polygon points="358,548 318,548 310,555 318,562 358,562" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/><text x="338" y="559" fill="#b45309" text-anchor="middle">+3V3</text>
+<line x1="380" y1="575" x2="360" y2="575" stroke="#1f2937" stroke-width="1.2"/><rect x="314" y="566" width="44" height="18" rx="3" fill="#f3f4f6" stroke="#1f2937" stroke-width="1.2"/><text x="336" y="579" fill="#1f2937" text-anchor="middle">GND</text>
+</g>
+<!-- cote RS232 (droite) -->
+<g font-size="10">
+<line x1="550" y1="515" x2="600" y2="515" stroke="#1f2937" stroke-width="1.2"/><text x="556" y="510" fill="#1f2937">T1OUT</text>
+<line x1="550" y1="545" x2="600" y2="545" stroke="#1f2937" stroke-width="1.2"/><text x="556" y="540" fill="#1f2937">R1IN</text>
+</g>
+
+<!-- J2 FLARM -->
+<rect x="660" y="476" width="150" height="110" rx="6" fill="#eaf2fb" stroke="#2b6cb0" stroke-width="1.5"/>
+<text x="735" y="500" font-size="13" fill="#1a4971" text-anchor="middle">J2 — FLARM</text>
+<text x="735" y="517" font-size="10" fill="#1f2937" text-anchor="middle">RJ45 (RS232)</text>
+<g font-size="10" fill="#1f2937">
+<line x1="660" y1="515" x2="600" y2="515" stroke="#1f2937" stroke-width="1.2"/><text x="664" y="512">RXD in (←T1OUT)</text>
+<line x1="660" y1="545" x2="600" y2="545" stroke="#1f2937" stroke-width="1.2"/><text x="664" y="542">TXD out (→R1IN)</text>
+<text x="664" y="562">GND → GND commun</text>
+<text x="664" y="578" fill="#b91c1c">+12 alim : NC</text>
+</g>
+
+<!-- Audio -->
+<rect x="150" y="520" width="150" height="74" rx="6" fill="#eaf2fb" stroke="#2b6cb0" stroke-width="1.5"/>
+<text x="225" y="546" font-size="13" fill="#1a4971" text-anchor="middle">U6 — PAM8403</text>
+<text x="225" y="563" font-size="10" fill="#1f2937" text-anchor="middle">ampli</text>
+<!-- AUDIO tag -> C3 -> IN -->
+<polygon points="8,548 48,548 56,555 48,562 8,562" fill="#eef6ff" stroke="#2b6cb0" stroke-width="1.2"/><text x="30" y="559" font-size="10" fill="#1a4971" text-anchor="middle">AUDIO</text>
+<line x1="56" y1="555" x2="92" y2="555" stroke="#1f2937" stroke-width="1.5"/>
+<line x1="92" y1="546" x2="92" y2="564" stroke="#1f2937" stroke-width="1.5"/>
+<line x1="100" y1="546" x2="100" y2="564" stroke="#1f2937" stroke-width="1.5"/>
+<text x="96" y="540" font-size="9" fill="#1f2937" text-anchor="middle">C3 1µF</text>
+<line x1="100" y1="555" x2="150" y2="555" stroke="#1f2937" stroke-width="1.5"/>
+<text x="153" y="552" font-size="9" fill="#1f2937">IN</text>
+<!-- PAM alim -->
+<polygon points="158,600 198,600 206,607 198,614 158,614" transform="translate(0,-2)" fill="#fff7ed" stroke="#b45309" stroke-width="1.2"/><text x="180" y="606" font-size="9" fill="#b45309" text-anchor="middle">+5V</text>
+<text x="214" y="606" font-size="9" fill="#6b7280">(+C4 decouplage)</text>
+<!-- HP -->
+<line x1="300" y1="555" x2="324" y2="555" stroke="#1f2937" stroke-width="1.5"/>
+<rect x="324" y="544" width="16" height="22" fill="#ffffff" stroke="#1f2937" stroke-width="1.2"/>
+<polygon points="340,544 358,534 358,576 340,566" fill="#ffffff" stroke="#1f2937" stroke-width="1.2"/>
+<text x="345" y="590" font-size="9" fill="#1f2937">LS1 8Ω</text>
+</svg>

@@ -7,13 +7,21 @@
 #include "LVGL_Driver.h"
 
 // === Anti-tearing VSYNC ===
-//  1 = synchro VSYNC : pas de tearing mais ~15 FPS (attente du balayage)
-//  0 = pas de synchro : ~30-50 FPS mais léger tearing sur aiguille rapide
+//  1 = VSYNC synchronized: zero tearing but ~15 FPS (waits for vertical blanking)
+//  0 = No synchronization: ~30-50 FPS but slight tearing during rapid needle movements
+// NOTE (1er juillet 2026) : gel total de l'ecran reproduit avec le direct_mode +
+// double framebuffer (LVGL_ANTITEAR_VSYNC=1) ET avec le mode partiel EN CHUNKS
+// (buffers < pleine hauteur, 2 flush par refresh). Cause reelle : un widget de
+// l'ecran "main" ne supporte pas d'etre redessine en plusieurs morceaux (chunk
+// boundary a mi-ecran) -> gele des la 1ere frame complete. Fix : un SEUL buffer
+// PLEIN ECRAN (voir Lvgl_Init, plus de decoupage en bandes de 240 lignes) ; garder
+// VSYNC=0 (pas de direct_mode) qui reste la config la plus simple/robuste testee.
 #define LVGL_ANTITEAR_VSYNC 0
 
-// Sémaphores anti-tearing (définis dans Display_ST7701.cpp)
+// Anti-tearing synchronization semaphores (defined in Display_ST7701.cpp)
 extern SemaphoreHandle_t sem_vsync_end;
 extern SemaphoreHandle_t sem_gui_ready;
+extern esp_lcd_panel_handle_t panel_handle;   // Created in Display_ST7701.cpp
 
 lv_disp_drv_t disp_drv;
 
@@ -38,22 +46,32 @@ void Lvgl_print(const char * buf)
     Displays LVGL content on the LCD
     This function implements associating LVGL data to the LCD screen
 */
+// --- Performance metrics telemetry (read by main.cpp for [PERF] log output) ---
+volatile uint32_t g_perfFlushCnt = 0, g_perfFlushUs = 0, g_perfWaitUs = 0, g_perfPx = 0;
+
 void Lvgl_Display_LCD( lv_disp_drv_t *disp_drv, const lv_area_t *area, lv_color_t *color_p )
 {
+  uint32_t t0 = micros();
 #if LVGL_ANTITEAR_VSYNC
-  // Anti-tearing : on attend le VSYNC avant d'ecrire dans le framebuffer
+  // Anti-tearing: wait for VSYNC before writing into the framebuffer
   if (sem_gui_ready != NULL && sem_vsync_end != NULL) {
     xSemaphoreGive(sem_gui_ready);
     xSemaphoreTake(sem_vsync_end, portMAX_DELAY);
   }
 #endif
   LCD_addWindow(area->x1, area->y1, area->x2, area->y2, ( uint8_t *)&color_p->full);
+  g_perfWaitUs += micros() - t0;
+  g_perfFlushCnt = g_perfFlushCnt + 1;
   lv_disp_flush_ready( disp_drv );
 }
 /*Read the touchpad*/
 void Lvgl_Touchpad_Read( lv_indev_drv_t * indev_drv, lv_indev_data_t * data )
 {
-  Touch_Read_Data();
+  // Tactile desactive : Touch_Read_Data() fait un acces I2C partage avec Driver_Loop
+  // (IMU/RTC/batterie sur l'autre coeur, meme bus, sans mutex). Le tactile n'est
+  // utilise nulle part dans l'UI (tout est pilote par les encodeurs) -> on saute
+  // la lecture I2C pour eliminer la collision qui gelait l'ecran.
+  // Touch_Read_Data();
   if (touch_data.points != 0x00) {
     data->point.x = touch_data.x;
     data->point.y = touch_data.y;
@@ -77,15 +95,17 @@ void example_increase_lvgl_tick(void *arg)
 void Lvgl_Init(void)
 {
   lv_init();
-  // Sémaphores anti-tearing (sync flush <-> VSYNC)
+  // Anti-tearing semaphores (sync flush <-> VSYNC)
   sem_vsync_end = xSemaphoreCreateBinary();
   sem_gui_ready = xSemaphoreCreateBinary();
-  // Mode framebuffer unique + buffers partiels PSRAM (mode rapide)
-  buf1 = heap_caps_malloc(ESP_PANEL_LCD_WIDTH * 240 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
-  buf2 = heap_caps_malloc(ESP_PANEL_LCD_WIDTH * 240 * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  // Full-screen single buffer (no row-chunking): a partial buffer (< full height,
+  // 2 flushes per refresh) reliably froze the screen on the first full-screen
+  // render, see note above. One full buffer = one flush per refresh, no chunk
+  // boundary -> stable. Costs ~450KB PSRAM, negligible on the 8MB module.
+  buf1 = heap_caps_malloc(ESP_PANEL_LCD_WIDTH * ESP_PANEL_LCD_HEIGHT * sizeof(lv_color_t), MALLOC_CAP_SPIRAM);
+  buf2 = NULL;
   printf("[LVGL] buf1=%p buf2=%p\n", buf1, buf2);
-  lv_disp_draw_buf_init( &draw_buf, buf1, buf2, ESP_PANEL_LCD_WIDTH * 240 );
-  printf("[LVGL] draw_buf_init OK\n");
+  lv_disp_draw_buf_init( &draw_buf, buf1, buf2, ESP_PANEL_LCD_WIDTH * ESP_PANEL_LCD_HEIGHT );
 
   /*Initialize the display*/
   lv_disp_drv_init( &disp_drv );
@@ -93,7 +113,7 @@ void Lvgl_Init(void)
   disp_drv.hor_res = LCD_HEIGHT;
   disp_drv.ver_res = LCD_WIDTH;
   disp_drv.flush_cb = Lvgl_Display_LCD;
-  /* Mode partiel : ni full_refresh ni direct_mode */
+  /* Partial mode: neither full_refresh nor direct_mode */
   disp_drv.draw_buf = &draw_buf;
   lv_disp_drv_register( &disp_drv );
 
@@ -118,8 +138,12 @@ void Lvgl_Init(void)
   esp_timer_start_periodic(lvgl_tick_timer, EXAMPLE_LVGL_TICK_PERIOD_MS * 1000);
 
 }
+volatile uint32_t g_perfHandlerUs = 0, g_perfHandlerCnt = 0;
 void Lvgl_Loop(void)
 {
+  uint32_t t = micros();
   lv_timer_handler(); /* let the GUI do its work */
+  g_perfHandlerUs += micros() - t;
+  g_perfHandlerCnt = g_perfHandlerCnt + 1;
   // vTaskDelay(pdMS_TO_TICKS(5));
 }

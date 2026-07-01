@@ -19,3 +19,4 @@ void FlightLog_ServerToggle(void);
 void FlightLog_ServerLoop(void);
 bool FlightLog_ServerActive(void);
 bool FlightLog_Active(void);
+void FlightLog_AddError(const char* module, const char* msg);

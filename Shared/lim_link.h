@@ -1,30 +1,30 @@
 /* ============================================================
- *  L!M Vario - Protocole de liaison CALCULATEUR <-> ECRAN
- *  Fichier PARTAGE par les 2 projets (Calculateur + Firmware).
+ *  L!M Vario - Link Protocol: CALCULATOR <-> DISPLAY
+ *  SHARED header file between Calculator and Firmware projects.
  *
- *  Liaison UART, duplex :
- *    Calculateur -> Ecran : trame binaire fixe ~50 Hz (lim_packet_t)
- *    Ecran -> Calculateur : trame de commande legere sur changement (lim_cmd_t)
+ *  Full-duplex UART link:
+ *    Calculator -> Display : Fixed binary frame ~50 Hz (lim_packet_t)
+ *    Display -> Calculator : Lightweight command frame on state change (lim_cmd_t)
  *
- *  Le calculateur envoie : donnees vario + etat des 2 encodeurs.
- *  L'ecran : affiche le vario et alimente sa logique menu avec
- *            les encodeurs recus (deltas + boutons).
+ *  The calculator sends: vario telemetry + state of both encoders.
+ *  The display: renders needles/UI and feeds its menu state machine
+ *               with encoder events (rotations + button clicks).
  * ============================================================ */
 #pragma once
 #include <stdint.h>
 
 #define LIM_SYNC0    0xA5
 #define LIM_SYNC1    0x5A
-#define LIM_VERSION  2           // v2 : envoie la pression (QNH applique cote ecran)
-#define LIM_BAUD     115200      // debit UART de la liaison (fiable sur les 2 ESP)
+#define LIM_VERSION  3           // v3 : added gps_track (ground course) for thermaling/wind
+#define LIM_BAUD     115200      // UART link baud rate (reliable across both ESP32s)
 
-// Bits du champ "flags" (trame Calculateur -> Ecran)
-#define LIM_FLAG_BMP_OK   0x01   // BMP388 lu correctement
-#define LIM_FLAG_SPD_OK   0x02   // MS4525 present -> vario compense TE
-#define LIM_FLAG_GPS_OK   0x04   // fix GPS valide -> airspeed = vitesse sol GPS
+// Flags field bits (Calculator -> Display frame)
+#define LIM_FLAG_BMP_OK   0x01   // BMP388 read successfully
+#define LIM_FLAG_SPD_OK   0x02   // MS4525 present -> TE compensated vario
+#define LIM_FLAG_GPS_OK   0x04   // Valid GPS fix -> airspeed = GPS ground speed
 
-// Bits du champ "cmd" (trame Ecran -> Calculateur)
-#define LIM_CMD_SINK_SOUND 0x01  // 1 = son descente actif (Full), 0 = silencieux (Mute)
+// Cmd field bits (Display -> Calculator frame)
+#define LIM_CMD_SINK_SOUND 0x01  // 1 = sink tone active (Full), 0 = silent (Mute)
 
 #pragma pack(push, 1)
 typedef struct {
@@ -32,19 +32,20 @@ typedef struct {
   uint8_t  sync1;       // 0x5A
   uint8_t  ver;         // LIM_VERSION
   uint8_t  flags;       // LIM_FLAG_*
-  float    pressure;    // Pa (pression absolue brute -> l'ecran calcule l'altitude avec le QNH)
-  float    vario;       // m/s (compense TE si dispo)
-  float    vario_int;   // m/s (integre ~20 s)
+  float    pressure;    // Pa (raw absolute static pressure -> display calculates altitude via QNH)
+  float    vario;       // m/s (TE compensated if available)
+  float    vario_int;   // m/s (integrated over ~20 s)
   float    airspeed;    // m/s
-  int32_t  enc1_count;  // position cumulee encodeur 1 (crans)
-  int32_t  enc2_count;  // position cumulee encodeur 2 (crans)
-  uint8_t  enc1_btn;    // niveau bouton enc1 (1 = appuye)
-  uint8_t  enc2_btn;    // niveau bouton enc2 (1 = appuye)
-  uint16_t crc;         // CRC16-CCITT sur tous les octets precedents
+  float    gps_track;   // ground course (track) in degrees 0..360 (NaN if no fix)
+  int32_t  enc1_count;  // cumulative encoder 1 step count
+  int32_t  enc2_count;  // cumulative encoder 2 step count
+  uint8_t  enc1_btn;    // encoder 1 button state (1 = pressed)
+  uint8_t  enc2_btn;    // encoder 2 button state (1 = pressed)
+  uint16_t crc;         // CRC16-CCITT across all preceding bytes
 } lim_packet_t;
 #pragma pack(pop)
 
-// CRC16-CCITT (poly 0x1021, init 0xFFFF)
+// CRC16-CCITT (polynomial 0x1021, init 0xFFFF)
 static inline uint16_t lim_crc16(const uint8_t* d, uint32_t n) {
   uint16_t crc = 0xFFFF;
   for (uint32_t i = 0; i < n; i++) {
@@ -55,7 +56,7 @@ static inline uint16_t lim_crc16(const uint8_t* d, uint32_t n) {
   return crc;
 }
 
-// Cote CALCULATEUR : termine un paquet (sync/ver/flags/crc) deja rempli de donnees
+// CALCULATOR side: finalize packet (fill sync/ver/flags/crc)
 static inline void lim_finalize(lim_packet_t* p, uint8_t flags) {
   p->sync0 = LIM_SYNC0;
   p->sync1 = LIM_SYNC1;
@@ -64,7 +65,7 @@ static inline void lim_finalize(lim_packet_t* p, uint8_t flags) {
   p->crc   = lim_crc16((const uint8_t*)p, sizeof(lim_packet_t) - sizeof(uint16_t));
 }
 
-// Cote ECRAN : valide un paquet recu
+// DISPLAY side: validate incoming packet
 static inline bool lim_check(const lim_packet_t* p) {
   if (p->sync0 != LIM_SYNC0 || p->sync1 != LIM_SYNC1) return false;
   if (p->ver != LIM_VERSION) return false;
@@ -72,9 +73,9 @@ static inline bool lim_check(const lim_packet_t* p) {
 }
 
 // ============================================================
-//  Trame de commande : ECRAN -> CALCULATEUR (3 octets)
-//  Envoye uniquement sur changement d'etat (pas en continu).
-//  Sync differents pour ne pas confondre avec lim_packet_t.
+//  Command Frame: DISPLAY -> CALCULATOR (3 bytes)
+//  Sent only on state change (not continuously).
+//  Different sync bytes to avoid confusion with lim_packet_t.
 // ============================================================
 #define LIM_CMD_SYNC0  0xC3
 #define LIM_CMD_SYNC1  0x3C
@@ -84,24 +85,21 @@ typedef struct {
   uint8_t sync0;  // 0xC3
   uint8_t sync1;  // 0x3C
   uint8_t cmd;    // LIM_CMD_* flags
-  uint8_t crc8;   // XOR de sync0 ^ sync1 ^ cmd (verification simple)
+  uint8_t crc8;   // XOR of sync0 ^ sync1 ^ cmd (simple verification)
 } lim_cmd_t;
 #pragma pack(pop)
 
-// Cote ECRAN : prepare et envoie la trame de commande
+// DISPLAY side: prepare and send command frame
 static inline void lim_cmd_send(uint8_t cmd, void* serial_ptr) {
   lim_cmd_t c;
   c.sync0 = LIM_CMD_SYNC0;
   c.sync1 = LIM_CMD_SYNC1;
   c.cmd   = cmd;
   c.crc8  = c.sync0 ^ c.sync1 ^ c.cmd;
-  // Cast generique: l'appelant passe son objet HardwareSerial* caste en void*
-  // On utilise une macro pour eviter une dependance Arduino dans ce header C pur
-  // -> voir lim_cmd_write() ci-dessous
-  (void)serial_ptr; // non utilise ici, macro recommandee
+  (void)serial_ptr; // unused here, macro recommended
 }
 
-// Macro pratique pour envoyer depuis un HardwareSerial Arduino :
+// Helper macro to transmit via Arduino HardwareSerial:
 // LIM_CMD_SEND(Serial1, cmd)
 #define LIM_CMD_SEND(serial, cmd_val) do { \
   lim_cmd_t _c; \
@@ -112,8 +110,53 @@ static inline void lim_cmd_send(uint8_t cmd, void* serial_ptr) {
   (serial).write((const uint8_t*)&_c, sizeof(_c)); \
 } while(0)
 
-// Cote CALCULATEUR : valide une trame de commande recue
+// CALCULATOR side: validate received command frame
 static inline bool lim_cmd_check(const lim_cmd_t* c) {
   if (c->sync0 != LIM_CMD_SYNC0 || c->sync1 != LIM_CMD_SYNC1) return false;
   return c->crc8 == (uint8_t)(c->sync0 ^ c->sync1 ^ c->cmd);
 }
+
+// ============================================================
+//  SOUND CONFIG FRAME: DISPLAY -> CALCULATOR (7 bytes)
+//  Sent on change (and at boot) for Sound menu settings.
+//  Different sync bytes (0xC4/0x4C) to avoid collision with lim_cmd_t.
+// ============================================================
+#define LIM_SCFG_SYNC0 0xC4
+#define LIM_SCFG_SYNC1 0x4C
+
+#pragma pack(push, 1)
+typedef struct {
+  uint8_t  sync0;   // 0xC4
+  uint8_t  sync1;   // 0x4C
+  uint16_t pitch;   // Base tone frequency in Hz (200..1500)
+  uint8_t  wave;    // 0=Sine 1=Square 2=Triangle
+  uint8_t  spread;  // 0..10, tone frequency variation intensity with vario
+  uint8_t  crc8;    // XOR of all preceding bytes
+} lim_scfg_t;
+#pragma pack(pop)
+
+static inline uint8_t lim_scfg_crc(const lim_scfg_t* s) {
+  const uint8_t* p = (const uint8_t*)s;
+  uint8_t x = 0;
+  for (uint32_t i = 0; i < sizeof(lim_scfg_t) - 1; i++) x ^= p[i];
+  return x;
+}
+
+// CALCULATOR side: validate received sound config frame
+static inline bool lim_scfg_check(const lim_scfg_t* s) {
+  if (s->sync0 != LIM_SCFG_SYNC0 || s->sync1 != LIM_SCFG_SYNC1) return false;
+  return s->crc8 == lim_scfg_crc(s);
+}
+
+// DISPLAY side: transmit sound config frame via Arduino HardwareSerial
+// LIM_SCFG_SEND(Serial1, pitch, wave, spread)
+#define LIM_SCFG_SEND(serial, pitch_val, wave_val, spread_val) do { \
+  lim_scfg_t _s; \
+  _s.sync0 = LIM_SCFG_SYNC0; \
+  _s.sync1 = LIM_SCFG_SYNC1; \
+  _s.pitch = (uint16_t)(pitch_val); \
+  _s.wave  = (uint8_t)(wave_val); \
+  _s.spread= (uint8_t)(spread_val); \
+  _s.crc8  = lim_scfg_crc(&_s); \
+  (serial).write((const uint8_t*)&_s, sizeof(_s)); \
+} while(0)

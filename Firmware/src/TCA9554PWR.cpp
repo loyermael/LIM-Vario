@@ -1,32 +1,37 @@
 #include "TCA9554PWR.h"
+#include "I2C_Driver.h"   // g_i2cMutex : bus I2C partage avec RTC/IMU sur l'autre coeur
 
-/*****************************************************  Operation register REG   ****************************************************/   
+/*****************************************************  Operation register REG   ****************************************************/
 uint8_t I2C_Read_EXIO(uint8_t REG)                             // Read the value of the TCA9554PWR register REG
 {
-  Wire.beginTransmission(TCA9554_ADDRESS);                
-  Wire.write(REG);                                        
-  uint8_t result = Wire.endTransmission();               
-  if (result != 0) {                                     
+  if (g_i2cMutex) xSemaphoreTake(g_i2cMutex, portMAX_DELAY);
+  Wire.beginTransmission(TCA9554_ADDRESS);
+  Wire.write(REG);
+  uint8_t result = Wire.endTransmission();
+  if (result != 0) {
     printf("The I2C transmission fails. - I2C Read EXIO\r\n");
   }
-  Wire.requestFrom(TCA9554_ADDRESS, 1); 
+  Wire.requestFrom(TCA9554_ADDRESS, 1);
   uint8_t bitsStatus;
-  if (Wire.available()) {                  
-    bitsStatus = Wire.read(); 
-  }                       
-  return bitsStatus;                                     
+  if (Wire.available()) {
+    bitsStatus = Wire.read();
+  }
+  if (g_i2cMutex) xSemaphoreGive(g_i2cMutex);
+  return bitsStatus;
 }
 uint8_t I2C_Write_EXIO(uint8_t REG,uint8_t Data)              // Write Data to the REG register of the TCA9554PWR
 {
-  Wire.beginTransmission(TCA9554_ADDRESS);                
-  Wire.write(REG);                                        
-  Wire.write(Data);                                       
-  uint8_t result = Wire.endTransmission();                  
-  if (result != 0) {    
+  if (g_i2cMutex) xSemaphoreTake(g_i2cMutex, portMAX_DELAY);
+  Wire.beginTransmission(TCA9554_ADDRESS);
+  Wire.write(REG);
+  Wire.write(Data);
+  uint8_t result = Wire.endTransmission();
+  if (g_i2cMutex) xSemaphoreGive(g_i2cMutex);
+  if (result != 0) {
     printf("The I2C transmission fails. - I2C Write EXIO\r\n");
     return -1;
   }
-  return 0;                                             
+  return 0;
 }
 /********************************************************** Set EXIO mode **********************************************************/       
 void Mode_EXIO(uint8_t Pin,uint8_t State)                 // Set the mode of the TCA9554PWR Pin. The default is Output mode (output mode or input mode). State: 0= Output mode 1= input mode   

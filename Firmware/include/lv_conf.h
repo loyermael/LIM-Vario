@@ -49,7 +49,13 @@
 #define LV_MEM_CUSTOM 0
 #if LV_MEM_CUSTOM == 0
     /*Size of the memory available for `lv_mem_alloc()` in bytes (>= 2kB)*/
-    #define LV_MEM_SIZE (48U * 1024U)          /*[bytes]*/
+    /* 2 juillet 2026 : 48 Ko -> 96 Ko. Cause racine des gels aleatoires trouvee via
+     * backtrace watchdog : lv_mem_buf_get()/lv_mem_realloc() (pool interne LVGL, separe
+     * du heap systeme ESP32 deja corrige) devenait pathologiquement lent une fois
+     * fragmente par les nombreux menus/listes ouverts-fermes ce soir (crash reproductible
+     * dans circ_calc_aa4 en dessinant le cadran rond vario_meter). On a largement la
+     * marge (113 Ko de heap systeme libre depuis le fix WiFi/Bluetooth). */
+    #define LV_MEM_SIZE (96U * 1024U)          /*[bytes]*/
 
     /*Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too.*/
     #define LV_MEM_ADR 0     /*0: unused*/

@@ -137,7 +137,13 @@ typedef struct _objects_t {
     lv_obj_t *prname2;
     lv_obj_t *prname4;
     lv_obj_t *prname5;
-    lv_obj_t *infobox_list;
+    lv_obj_t *center_info_list;
+    lv_obj_t *cname0;
+    lv_obj_t *cname1;
+    lv_obj_t *cname2;
+    lv_obj_t *prname5_1;
+    lv_obj_t *center_info_list_1;
+    lv_obj_t *ibname12;
     lv_obj_t *ibname0;
     lv_obj_t *ibname1;
     lv_obj_t *ibname2;
@@ -150,12 +156,6 @@ typedef struct _objects_t {
     lv_obj_t *ibname9;
     lv_obj_t *ibname10;
     lv_obj_t *ibname11;
-    lv_obj_t *ibname12;
-    lv_obj_t *center_info_list;
-    lv_obj_t *cname0;
-    lv_obj_t *cname1;
-    lv_obj_t *cname2;
-    lv_obj_t *prname5_1;
     lv_obj_t *infobox_editor_container;
     lv_obj_t *ib_frame_0;
     lv_obj_t *ib_val_0;

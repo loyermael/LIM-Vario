@@ -27,6 +27,7 @@
 #include <Preferences.h>
 #include <math.h>
 #include "esp_heap_caps.h"
+#include "esp_task_wdt.h"
 
 // ============================================================
 //  ⚠️ SIMULATION DE BANC - METTRE A 0 AVANT UN VOL REEL ⚠️
@@ -885,6 +886,11 @@ static void SetupMenu_Open()  { g_setupOpen = true; g_menuState = MENU_CLOSED; g
 static void SetupMenu_Close() {
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); }
   if (g_ibEditState != IBEDIT_NONE) { InfoBox_CloseEdit(); }
+  // Clavier de saisie (New/Save profil) : sans ca, un appui long pendant la saisie
+  // fermait tout le setup en laissant le clavier affiche et inaccessible pour toujours
+  // (2 juillet 2026 - plus aucun code ne pouvait le supprimer une fois g_setupOpen=false).
+  if (s_kbContainer) { lv_obj_del(s_kbContainer); s_kbContainer = NULL; }
+  if (s_kbGroup)     { lv_group_del(s_kbGroup);   s_kbGroup     = NULL; }
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
 static void SetupMenu_Back()  {
@@ -1179,7 +1185,7 @@ static void SetupMenu_Init()
   // --- Editeur Info boxes construit en EEZ ---
   if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_mode_list)        lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_HIDDEN);
-  if (objects.infobox_list)             lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_HIDDEN);
+  if (objects.center_info_list_1)             lv_obj_add_flag(objects.center_info_list_1, LV_OBJ_FLAG_HIDDEN);
   if (objects.center_info_list)         lv_obj_add_flag(objects.center_info_list, LV_OBJ_FLAG_HIDDEN);
 
   s_ibFrames[0] = objects.ib_frame_0;
@@ -1226,9 +1232,9 @@ static void SetupMenu_Init()
     lv_obj_set_scrollbar_mode(objects.infobox_mode_list, LV_SCROLLBAR_MODE_OFF);
     lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   }
-  if (objects.infobox_list) {
-    lv_obj_set_scrollbar_mode(objects.infobox_list, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  if (objects.center_info_list_1) {
+    lv_obj_set_scrollbar_mode(objects.center_info_list_1, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_flag(objects.center_info_list_1, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   }
   if (objects.center_info_list) {
     lv_obj_set_scrollbar_mode(objects.center_info_list, LV_SCROLLBAR_MODE_OFF);
@@ -1260,7 +1266,7 @@ static void SetupMenu_HideLists()
   if (objects.glider_list)              lv_obj_add_flag(objects.glider_list,  LV_OBJ_FLAG_HIDDEN);
   if (objects.profil_list)              lv_obj_add_flag(objects.profil_list,  LV_OBJ_FLAG_HIDDEN);
   if (objects.center_info_list)         lv_obj_add_flag(objects.center_info_list, LV_OBJ_FLAG_HIDDEN);
-  if (objects.infobox_list)             lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_HIDDEN);
+  if (objects.center_info_list_1)             lv_obj_add_flag(objects.center_info_list_1, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_mode_list)        lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
 }
@@ -1279,6 +1285,7 @@ static const lv_coord_t ROOT_BY[7] = {  87, 142, 197, 252, 307, 362, 417 };
 // selectionne dans le cadre fixe, et les items hors du cadre setup_frame disparaissent.
 static void SetupMenu_RenderRoot()
 {
+  IBDBG("[IB] RenderRoot enter smSel=%d\n", g_smSel);
   SetupMenu_HideLists();
   lv_obj_t* it[7] = { objects.item0, objects.item1, objects.item2, objects.item3, objects.item5, objects.item6, objects.item4 };
   const SmMenu* m = &SM[SM_ROOT];
@@ -1311,6 +1318,8 @@ static void SetupMenu_RenderRoot()
       SetupMenu_ApplyItemZoom(it[i], cy, frame_cy);
     }
   }
+  IBDBG("[IB] RenderRoot done\n");
+  g_ibJustRendered = true;
 }
 
 // Rendu GENERIQUE d'un sous-menu EEZ (conteneur a positions absolues).
@@ -1463,7 +1472,7 @@ static void SetupMenu_Apply()
       SmMenu ciMenu = {"Center Mode", CI_LIST, 4};
       SetupMenu_RenderList(objects.center_info_list, s_ciListNames, s_ciListVals, &ciMenu);
     } else {
-      SetupMenu_RenderList(objects.infobox_list, s_ibListNames, s_ibListVals, m);
+      SetupMenu_RenderList(objects.center_info_list_1, s_ibListNames, s_ibListVals, m);
     }
     IBDBG("[IB] Apply SM_INFOBOX_METRIC done\n");
     return;
@@ -2263,6 +2272,7 @@ static void Menu_AutoClose()
 // ============================================================
 void Driver_Loop(void *parameter)
 {
+  esp_task_wdt_add(NULL);   // watchdog explicite (2 juillet 2026, cf setup())
   uint8_t  slow    = 0;
   uint32_t lastPkt = 0;
   while (1) {
@@ -2281,6 +2291,7 @@ void Driver_Loop(void *parameter)
       RTC_Loop();
       BAT_Get_Volts();
     }
+    esp_task_wdt_reset();
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
@@ -2303,6 +2314,20 @@ void setup()
   Serial.begin(115200);
   delay(400);
   Serial.println("\n=== L!M Vario boot ===");
+
+  // Watchdog explicite (2 juillet 2026) : aucun panic watchdog jamais observe malgre
+  // des gels totaux -> signe d'une attente BLOQUANTE (semaphore/mutex/registre materiel
+  // jamais libere) plutot qu'une boucle qui consomme le CPU (qui aurait fini par
+  // affamer la tache idle et declencher le watchdog par defaut). On enregistre nous-memes
+  // la tache loop() ET Driver_Loop pour forcer un panic + backtrace au prochain gel.
+  esp_task_wdt_config_t twdt_config = {
+    .timeout_ms = 6000,
+    .idle_core_mask = (1 << 0) | (1 << 1),
+    .trigger_panic = true,
+  };
+  esp_task_wdt_reconfigure(&twdt_config);
+  esp_task_wdt_add(NULL);   // tache loop() (setup() tourne sur la meme tache)
+
   Config_Load();
 
   // Wireless_Test2() retire (2 juillet 2026) : demo constructeur (scan WiFi + Bluetooth)
@@ -2340,6 +2365,7 @@ void setup()
 #if SIM_THERMAL
     if (millis() - splashT0 >= SPLASH_MIN_MS) break;   // banc : pas d'attente liaison
 #endif
+    esp_task_wdt_reset();   // boucle longue (jusqu'a 15s) -> nourrir le watchdog explicite
     delay(5);
   }
   if (!g_linkOk) {
@@ -2388,6 +2414,8 @@ void loop()
   SetupMenu_Apply();   // rend le setup menu (appui long ENC1)
 
   // Journal de vol (10 Hz) + serveur WiFi de recuperation
+  // Test bisection du 2 juillet 2026 : desactive temporairement, gel toujours present
+  // -> SD/FlightLog innocente, cause = timeout I2C manquant (cf I2C_Driver.cpp). Reactive.
   FlightLog_Tick(g_pressure, g_altitude, g_vario, g_varioFused,
                  VarioFusion_GetVertAccel(), g_volume);
   FlightLog_ServerLoop();
@@ -2437,5 +2465,6 @@ void loop()
     }
   }
 
+  esp_task_wdt_reset();
   vTaskDelay(pdMS_TO_TICKS(5));
 }

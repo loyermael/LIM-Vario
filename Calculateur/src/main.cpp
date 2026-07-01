@@ -77,6 +77,7 @@ static uint32_t lastUs    = 0;
 static uint32_t bootMs    = 0;   // Startup delay timestamp to ignore sensor boot transients
 static float    g_simVz    = 0.0f;   // Simulated thermal vario (SIM_VARIO)
 static float    g_simTrack = NAN;    // Simulated ground track heading streamed to display
+static float    g_lastGoodP_pa = NAN; // Last plausible raw pressure (outlier rejection, see below)
 
 // ---- Volume Control (ENC2) ----
 static uint8_t  sndVol   = 0;   // Current acoustic volume 0..20 (default 0 = muted at boot)
@@ -206,7 +207,27 @@ void loop() {
   bool  gotBaro = false;
   float p_pa = P0_PA, tempC = 15.0f, alt = 0.0f;
   if (bmpOk && bmp.performReading()) {
-    p_pa    = bmp.pressure;
+    float p_raw = bmp.pressure;
+    // Outlier rejection (2 juillet 2026) : un hoquet I2C ponctuel sur le BMP388 peut
+    // renvoyer une pression brute aberrante, transmise telle quelle a 50 Hz sans filtre
+    // avant ce fix -> pic de vario/altitude cote ecran (observe : sauts de ~75 m au sol).
+    // 100 Pa entre deux echantillons consecutifs (dt ~20 ms) equivaut a ~625 m/s de
+    // vitesse verticale : jamais atteint en vol reel, donc seul un vrai glitch capteur
+    // est rejete ici (la valeur precedente valide est reutilisee pour cet echantillon).
+    // Compteur anti-blocage : si la reference elle-meme etait la valeur glitchee (ex :
+    // tout premier relevé au boot), TOUTES les vraies bonnes lectures suivantes s'en
+    // ecarteraient de +100 Pa et seraient rejetees indefiniment -> altitude figee sur
+    // la valeur foireuse (observe : alt bloquee ~20s). Au bout de 10 rejets consecutifs
+    // (~200 ms), on accepte la nouvelle lecture et on reinitialise la reference.
+    static uint8_t s_rejectStreak = 0;
+    if (!isnan(g_lastGoodP_pa) && fabsf(p_raw - g_lastGoodP_pa) > 100.0f && s_rejectStreak < 10) {
+      p_pa = g_lastGoodP_pa;
+      s_rejectStreak++;
+    } else {
+      p_pa = p_raw;
+      g_lastGoodP_pa = p_pa;
+      s_rejectStreak = 0;
+    }
     tempC   = bmp.temperature;
     alt     = altitude_from_p(p_pa);
     gotBaro = true;

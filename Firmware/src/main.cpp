@@ -62,11 +62,18 @@ static uint32_t g_pktCount = 0;
 // ============================================================
 static volatile float g_varioFused = 0.0f;   // vario fusionne (m/s)
 static volatile float g_varioComp  = 0.0f;   // vario apres compensation GPS (m/s)
-static volatile float g_airspeed   = 0.0f;   // vitesse recue (MS4525 ou vitesse sol GPS)
+static volatile float g_airspeed   = 0.0f;   // vitesse AIR (MS4525 ; 0 si pas de pitot)
+static volatile float g_gndSpeed   = 0.0f;   // vitesse SOL GPS (meme unite que g_airspeed)
+static volatile float g_gpsAlt     = NAN;    // altitude GPS (m ; NaN si pas de fix)
 static volatile bool  g_gpsOk      = false;  // flag fix GPS valide (recu du calculateur)
 static volatile float g_gpsTrack   = NAN;    // cap sol GPS (deg 0..360, NaN si pas de fix)
 static volatile bool  g_circling   = false;  // true = spirale detectee (sinon vol droit)
 static volatile int   g_turnDir    = 0;      // sens de rotation : +1 droite / -1 gauche / 0
+static float g_varioFiltered = NAN;   // vario apres filtre utilisateur (Fast/Med/Slow), EMA
+static float g_varioAvg      = 0.0f;  // moyenne glissante du vario (Avg climb 15/20/30 s), recalculee ecran
+static float g_climbGain     = 0.0f;  // gain d'altitude dans le thermique courant (m)
+static uint32_t g_takeoffMs  = 0;     // instant de decollage en ms (0 = pas encore decolle)
+static bool     g_inFlight   = false; // etat vol (detection decollage / atterrissage)
 
 // ============================================================
 //  SON VARIO (GPIO0 → MOSFET → buzzer piezo passif)
@@ -177,8 +184,8 @@ static uint8_t g_ibConfigClimb[6]  = { IB_VARIO_INST, IB_VARIO_INT, IB_EMPTY, IB
 static uint8_t g_ibConfigCruise[6] = { IB_VARIO_INST, IB_MACCREADY, IB_EMPTY, IB_ALT_BARO, IB_GLIDE, IB_GND_SPEED };
 static uint8_t g_centerConfigClimb = CENTER_THERMAL_HELPER;
 static uint8_t g_centerConfigCruise = CENTER_WIND_DIR;
-static bool    g_ibEditCruiseMode  = false; // false=Climb, true=Cruise
-static uint8_t* g_infoBoxConfig    = g_ibConfigClimb; // pointeur vers profil actif
+static bool    g_ibEditCruiseMode  = true; // false=Climb, true=Cruise (Cruise = profil affiche par defaut)
+static uint8_t* g_infoBoxConfig    = g_ibConfigCruise; // pointeur vers profil actif
 
 enum InfoBoxEditState {
   IBEDIT_NONE = 0,
@@ -189,9 +196,9 @@ enum InfoBoxEditState {
 static InfoBoxEditState g_ibEditState = IBEDIT_NONE;
 static int s_ibZoneSel = 0;
 static int s_ibChooseSel = 0;
-static lv_obj_t* s_ibFrames[6] = {0};
+static lv_obj_t* s_ibFrames[7] = {0};   // [6] = ib_frame_6 = "Back" (ajoute 2 juillet 2026)
 static lv_obj_t* s_ibLabels[6] = {0};
-static lv_obj_t* s_ibValLabels[6] = {0};
+static lv_obj_t* s_ibValLabels[7] = {0};  // [6] jamais assigne : "Back" a un texte fixe, pas de valeur dynamique
 
 static const char* const s_ibMetricNames[IB_METRIC_MAX] = {
   "Inst. Vario",
@@ -525,11 +532,15 @@ static const SmItem IBIT_MODE[] = {
   {"Cruise Mode", ST_INFO, 1},
   {"Back",        ST_BACK, 0}
 };
+// .arg = VRAIE valeur d'enum InfoBoxMetric (pas l'index de liste) -> lu via it->arg,
+// jamais via g_smSel brut (cf bug de decalage corrige le 2 juillet 2026 : Ground Speed
+// absent de la liste faisait glisser tout le reste d'un cran).
 static const SmItem IBIT_LIST[] = {
-  {"Inst. Vario", ST_INFO, 0}, {"Avg. Vario", ST_INFO, 1}, {"MacCready", ST_INFO, 2},
-  {"Baro Alt.", ST_INFO, 3}, {"GPS Alt.", ST_INFO, 4}, {"Time", ST_INFO, 5},
-  {"Flight Time", ST_INFO, 6}, {"Wind", ST_INFO, 7}, {"Climb Gain", ST_INFO, 8},
-  {"Flight Level", ST_INFO, 9}, {"Glide Ratio", ST_INFO, 10}, {"Disabled", ST_INFO, 11},
+  {"Inst. Vario", ST_INFO, IB_VARIO_INST}, {"Avg. Vario", ST_INFO, IB_VARIO_INT}, {"MacCready", ST_INFO, IB_MACCREADY},
+  {"Baro Alt.", ST_INFO, IB_ALT_BARO}, {"GPS Alt.", ST_INFO, IB_ALT_GPS}, {"Time", ST_INFO, IB_TIME},
+  {"Flight Time", ST_INFO, IB_FLIGHT_TIME}, {"Wind", ST_INFO, IB_WIND}, {"Climb Gain", ST_INFO, IB_CLIMB_GAIN},
+  {"Flight Level", ST_INFO, IB_FLIGHT_LVL}, {"Glide Ratio", ST_INFO, IB_GLIDE}, {"Airspeed", ST_INFO, IB_AIRSPEED},
+  {"Ground Speed", ST_INFO, IB_GND_SPEED}, {"Disabled", ST_INFO, IB_EMPTY},
   {"Back", ST_BACK, 0}
 };
 static const SmItem CI_LIST[] = {
@@ -559,7 +570,7 @@ static const SmItem PRIT[] = {
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
   {"System",SYIT,6},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,5},{"Select Metric",IBIT_LIST,13}
+  {"Glider infos",GLIT,10},{"Profile",PRIT,5},{"Select Metric",IBIT_LIST,15}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -587,7 +598,7 @@ static lv_obj_t* s_prName[5]  = {0}; // sous-menu Profile (panel EEZ profil_list
 static lv_obj_t* s_prVal[5]   = {0};
 static char      g_profileName[8] = {0}; // nom du profil actif (affiche dans prval0)
 static lv_obj_t* s_imName[3] = {0}; static lv_obj_t* s_imVal[3] = {0};
-static lv_obj_t* s_ibListNames[13] = {0}; static lv_obj_t* s_ibListVals[13] = {0};
+static lv_obj_t* s_ibListNames[15] = {0}; static lv_obj_t* s_ibListVals[15] = {0};
 static lv_obj_t* s_ciListNames[4] = {0}; static lv_obj_t* s_ciListVals[4] = {0};
 
 // Etat de confirmation (reset config / factory reset)
@@ -602,14 +613,21 @@ static lv_obj_t* s_confirmNo    = NULL;
 // Appele a chaque changement d'un reglage Sound + une fois au boot (lien etabli).
 static void SoundCfg_Send() { LIM_SCFG_SEND(Serial1, g_tonePitch, g_waveform, g_toneSpread); }
 
+// Envoie l'etat des commandes vers le calculateur via lim_cmd_t : sink sound + Condor sim
+// (bitfield combine, tout renvoye a chaque changement pour ne pas ecraser l'autre etat).
+static void Cmd_SendState() {
+  uint8_t cmd = (g_sinkSound ? LIM_CMD_SINK_SOUND : 0) | (g_condorSim ? LIM_CMD_CONDOR : 0);
+  LIM_CMD_SEND(Serial1, cmd);
+}
+
 static void SmToggle(uint8_t s) {
   switch (s) {
     case SET_HELPER:     g_helperEnable = !g_helperEnable; break;
-    case SET_SINK:       g_sinkSound = !g_sinkSound; LIM_CMD_SEND(Serial1, g_sinkSound ? LIM_CMD_SINK_SOUND : 0x00); break;
+    case SET_SINK:       g_sinkSound = !g_sinkSound; Cmd_SendState(); break;
     case SET_LOGGER:     g_loggerEnable = !g_loggerEnable; break;
     case SET_UPDATE:     g_updateMode = !g_updateMode; break;
-    case SET_CONDORSIM:  g_condorSim  = !g_condorSim;  break;
-    case SET_APPCONNECT: g_updateMode = !g_updateMode; break;   // alias App connect -> WiFi OTA
+    case SET_CONDORSIM:  g_condorSim  = !g_condorSim;  Cmd_SendState(); break;   // active/desactive la prise en compte Condor cote calc
+    case SET_APPCONNECT: FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); break;  // AP WiFi + companion app + OTA
   }
   Config_Save();
 }
@@ -656,6 +674,8 @@ static void kb_event_cb(lv_event_t* e) {
     if (s_kbContainer) {
       lv_obj_del(s_kbContainer);
       s_kbContainer = NULL;
+      s_kbTextArea = NULL;
+      s_kbKeyboard = NULL;
     }
     if (s_kbGroup) {
       lv_group_del(s_kbGroup);
@@ -666,6 +686,8 @@ static void kb_event_cb(lv_event_t* e) {
     if (s_kbContainer) {
       lv_obj_del(s_kbContainer);
       s_kbContainer = NULL;
+      s_kbTextArea = NULL;
+      s_kbKeyboard = NULL;
     }
     if (s_kbGroup) {
       lv_group_del(s_kbGroup);
@@ -802,7 +824,7 @@ static void SmValTxt(uint8_t s, char* b, int n) {
     case SET_VAVG:   snprintf(b, n, "%ds", g_avgClimb == 0 ? 15 : (g_avgClimb == 1 ? 20 : 30)); break;
     case SET_UPDATE:    snprintf(b, n, g_updateMode ? "ON" : "OFF"); break;
     case SET_CONDORSIM: snprintf(b, n, g_condorSim  ? "ON" : "OFF"); break;
-    case SET_APPCONNECT:snprintf(b, n, g_updateMode ? "ON" : "OFF"); break;
+    case SET_APPCONNECT:snprintf(b, n, FlightLog_ServerActive() ? "ON" : "OFF"); break;
     case SET_FWVER:     snprintf(b, n, "v%s", LIM_FW_SCREEN); break;
     case SET_BUILD:     snprintf(b, n, "%s %s", __DATE__, __TIME__); break;
     case SET_LINKVER:   snprintf(b, n, "v%d", LIM_VERSION); break;
@@ -832,7 +854,7 @@ static bool g_ibJustRendered = false;  // breadcrumb : true juste apres un Setup
 
 static void InfoBox_RenderSelect() {
   IBDBG("[IB] RenderSelect zone=%d\n", s_ibZoneSel);
-  for (int i = 0; i < 6; i++) {
+  for (int i = 0; i < 7; i++) {
     if (!s_ibFrames[i]) continue;
     if (i == s_ibZoneSel) {
       lv_obj_set_style_border_color(s_ibFrames[i], lv_color_hex(0xfbd500), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -889,7 +911,7 @@ static void SetupMenu_Close() {
   // Clavier de saisie (New/Save profil) : sans ca, un appui long pendant la saisie
   // fermait tout le setup en laissant le clavier affiche et inaccessible pour toujours
   // (2 juillet 2026 - plus aucun code ne pouvait le supprimer une fois g_setupOpen=false).
-  if (s_kbContainer) { lv_obj_del(s_kbContainer); s_kbContainer = NULL; }
+  if (s_kbContainer) { lv_obj_del(s_kbContainer); s_kbContainer = NULL; s_kbTextArea = NULL; s_kbKeyboard = NULL; }
   if (s_kbGroup)     { lv_group_del(s_kbGroup);   s_kbGroup     = NULL; }
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
@@ -954,8 +976,14 @@ static void SetupMenu_Rotate(long d) {
   }
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
-    // Zone 5 inactive (pas de label EEZ) -> exclue de la rotation, seules 0..4 selectionnables
-    s_ibZoneSel = (s_ibZoneSel + (int)d % 5 + 5) % 5;
+    // Ordre de rotation : 0,1,2,3,4,6 (zone 5 reste inactive, pas de label EEZ ; 6 = "Back",
+    // ajoute 2 juillet 2026 sous ib_frame_6, exclu de g_infoBoxConfig).
+    static const int IB_ZONE_SEQ[] = {0, 1, 2, 3, 4, 6};
+    const int IB_ZONE_SEQ_N = 6;
+    int pos = 0;
+    for (int k = 0; k < IB_ZONE_SEQ_N; k++) if (IB_ZONE_SEQ[k] == s_ibZoneSel) { pos = k; break; }
+    pos = ((pos + (int)d) % IB_ZONE_SEQ_N + IB_ZONE_SEQ_N) % IB_ZONE_SEQ_N;
+    s_ibZoneSel = IB_ZONE_SEQ[pos];
     IBDBG("[IB] Rotate zone->%d\n", s_ibZoneSel);
     InfoBox_RenderSelect();
     return;
@@ -1014,6 +1042,10 @@ static void SetupMenu_Press() {
     return;
   }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
+    if (s_ibZoneSel == 6) {   // "Back" (ib_frame_6) : ferme l'editeur sans choisir de zone
+      InfoBox_CloseEdit();
+      return;
+    }
     IBDBG("[IB] Press SELECT_ZONE zone=%d -> CHOOSE_METRIC\n", s_ibZoneSel);
     g_ibEditState = IBEDIT_CHOOSE_METRIC;
     if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
@@ -1021,15 +1053,26 @@ static void SetupMenu_Press() {
     g_smStk[g_smDepth] = g_smMenu; g_smStkSel[g_smDepth] = g_smSel; g_smDepth++;
     g_smMenu = SM_INFOBOX_METRIC;
     int curVal = (s_ibZoneSel == 2) ? (g_ibEditCruiseMode ? g_centerConfigCruise : g_centerConfigClimb) : g_infoBoxConfig[s_ibZoneSel];
-    int maxVal = (s_ibZoneSel == 2) ? 3 : 12;
-    g_smSel = (curVal >= 0 && curVal < maxVal) ? curVal : 0;
+    if (s_ibZoneSel == 2) {
+      // Centre : CI_LIST, enum == index directement (0,1,2), Back=3.
+      g_smSel = (curVal >= 0 && curVal < 3) ? curVal : 0;
+    } else {
+      // Liste metrique : g_infoBoxConfig stocke la VRAIE valeur d'enum -> chercher
+      // l'index de IBIT_LIST dont .arg correspond (le mapping n'est plus 1:1).
+      const SmMenu* mm = &SM[SM_INFOBOX_METRIC];
+      int found = 0;
+      for (int k = 0; k < mm->n; k++) {
+        if (mm->items[k].type == ST_INFO && mm->items[k].arg == curVal) { found = k; break; }
+      }
+      g_smSel = (int8_t)found;
+    }
     g_smDirty = true;
-    IBDBG("[IB] curVal=%d maxVal=%d g_smSel=%d\n", curVal, maxVal, g_smSel);
+    IBDBG("[IB] curVal=%d g_smSel=%d\n", curVal, g_smSel);
     return;
   }
   if (g_smMenu == SM_INFOBOX_METRIC) {
     IBDBG("[IB] Press SM_INFOBOX_METRIC sel=%d zone=%d\n", g_smSel, s_ibZoneSel);
-    int maxIdx = (s_ibZoneSel == 2) ? 3 : 12;
+    int maxIdx = (s_ibZoneSel == 2) ? 3 : (SM[SM_INFOBOX_METRIC].n - 1);
     if (g_smSel == maxIdx) {
       SetupMenu_Back();
       return;
@@ -1038,7 +1081,8 @@ static void SetupMenu_Press() {
       if (g_ibEditCruiseMode) g_centerConfigCruise = (uint8_t)g_smSel;
       else g_centerConfigClimb = (uint8_t)g_smSel;
     } else {
-      g_infoBoxConfig[s_ibZoneSel] = (uint8_t)g_smSel;
+      // Ecrit la VRAIE valeur d'enum (it->arg), pas l'index brut dans la liste.
+      g_infoBoxConfig[s_ibZoneSel] = (uint8_t)SM[SM_INFOBOX_METRIC].items[g_smSel].arg;
     }
     IBDBG("[IB] before Config_Save\n");
     Config_Save();
@@ -1185,7 +1229,7 @@ static void SetupMenu_Init()
   // --- Editeur Info boxes construit en EEZ ---
   if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_mode_list)        lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_HIDDEN);
-  if (objects.center_info_list_1)             lv_obj_add_flag(objects.center_info_list_1, LV_OBJ_FLAG_HIDDEN);
+  if (objects.infobox_list)             lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_HIDDEN);
   if (objects.center_info_list)         lv_obj_add_flag(objects.center_info_list, LV_OBJ_FLAG_HIDDEN);
 
   s_ibFrames[0] = objects.ib_frame_0;
@@ -1194,6 +1238,7 @@ static void SetupMenu_Init()
   s_ibFrames[3] = objects.ib_frame_3;
   s_ibFrames[4] = objects.ib_frame_4;
   s_ibFrames[5] = objects.ib_frame_5;
+  s_ibFrames[6] = objects.ib_frame_6;   // "Back" (ajoute 2 juillet 2026)
 
   s_ibValLabels[0] = objects.ib_val_0;
   s_ibValLabels[1] = objects.ib_val_1;
@@ -1220,8 +1265,10 @@ static void SetupMenu_Init()
   s_ibListNames[8]  = objects.ibname8;
   s_ibListNames[9]  = objects.ibname9;
   s_ibListNames[10] = objects.ibname10;
-  s_ibListNames[11] = objects.ibname11;
-  s_ibListNames[12] = objects.ibname12;
+  s_ibListNames[11] = objects.ibname11;  // "Airspeed"
+  s_ibListNames[12] = objects.ibname13;  // "Ground Speed"
+  s_ibListNames[13] = objects.ibname14;  // "Disabled"
+  s_ibListNames[14] = objects.ibname15;  // "Back"
 
   s_ciListNames[0] = objects.cname0;
   s_ciListNames[1] = objects.cname1;
@@ -1232,9 +1279,9 @@ static void SetupMenu_Init()
     lv_obj_set_scrollbar_mode(objects.infobox_mode_list, LV_SCROLLBAR_MODE_OFF);
     lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   }
-  if (objects.center_info_list_1) {
-    lv_obj_set_scrollbar_mode(objects.center_info_list_1, LV_SCROLLBAR_MODE_OFF);
-    lv_obj_add_flag(objects.center_info_list_1, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
+  if (objects.infobox_list) {
+    lv_obj_set_scrollbar_mode(objects.infobox_list, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   }
   if (objects.center_info_list) {
     lv_obj_set_scrollbar_mode(objects.center_info_list, LV_SCROLLBAR_MODE_OFF);
@@ -1248,6 +1295,7 @@ static void SetupMenu_Init()
   s_confirmMsg   = objects.confirm_msg;
   s_confirmYes   = objects.confirm_yes;
   s_confirmNo    = objects.confirm_no;
+  lv_obj_set_scrollbar_mode(s_confirmPanel, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN);
 
   lv_obj_set_style_bg_opa(objects.setup_panel, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1266,7 +1314,7 @@ static void SetupMenu_HideLists()
   if (objects.glider_list)              lv_obj_add_flag(objects.glider_list,  LV_OBJ_FLAG_HIDDEN);
   if (objects.profil_list)              lv_obj_add_flag(objects.profil_list,  LV_OBJ_FLAG_HIDDEN);
   if (objects.center_info_list)         lv_obj_add_flag(objects.center_info_list, LV_OBJ_FLAG_HIDDEN);
-  if (objects.center_info_list_1)             lv_obj_add_flag(objects.center_info_list_1, LV_OBJ_FLAG_HIDDEN);
+  if (objects.infobox_list)             lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_mode_list)        lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
 }
@@ -1307,7 +1355,7 @@ static void SetupMenu_RenderRoot()
   // en BAS seulement au bord rond de l'ecran (objects.main).
   lv_obj_update_layout(objects.main);
   lv_area_t sf, mn; lv_obj_get_coords(objects.setup_frame, &sf); lv_obj_get_coords(objects.main, &mn);
-  lv_coord_t topY = 65, botY = 460;
+  lv_coord_t topY = 85, botY = 460;
   lv_coord_t frame_cy = (fa.y1 + fa.y2) / 2;
   for (int i = 0; i < 7; i++) {
     lv_obj_get_coords(it[i], &la);
@@ -1388,7 +1436,7 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
   IBDBG("[IB] RenderList: centering done, masking\n");
   // Masquage : visible seulement entre le bas du titre et le bord de l'ecran.
   lv_obj_update_layout(objects.main);
-  lv_coord_t topY = 65, botY = 460;
+  lv_coord_t topY = 85, botY = 460;
   lv_area_t la;
   for (int i = 0; i < n; i++) {
     if (!names[i]) continue;
@@ -1423,22 +1471,16 @@ static void SetupMenu_Apply()
   g_smDirty = false;
   if (!g_setupOpen) {
     lv_obj_add_flag(objects.setup_panel, LV_OBJ_FLAG_HIDDEN);
-    if (objects.vario_meter)      lv_obj_clear_flag(objects.vario_meter, LV_OBJ_FLAG_HIDDEN);
-    if (objects.lbl_alt)          lv_obj_clear_flag(objects.lbl_alt, LV_OBJ_FLAG_HIDDEN);
-    if (objects.lbl_vario)        lv_obj_clear_flag(objects.lbl_vario, LV_OBJ_FLAG_HIDDEN);
-    if (objects.lbl_vario_int)    lv_obj_clear_flag(objects.lbl_vario_int, LV_OBJ_FLAG_HIDDEN);
-    if (objects.img_gps)          lv_obj_clear_flag(objects.img_gps, LV_OBJ_FLAG_HIDDEN);
-    if (s_ibLabels[1])            lv_obj_clear_flag(s_ibLabels[1], LV_OBJ_FLAG_HIDDEN);
+    if (objects.vario_meter)               lv_obj_clear_flag(objects.vario_meter, LV_OBJ_FLAG_HIDDEN);
+    if (objects.infobox_display_container) lv_obj_clear_flag(objects.infobox_display_container, LV_OBJ_FLAG_HIDDEN);
+    if (objects.img_gps)                   lv_obj_clear_flag(objects.img_gps, LV_OBJ_FLAG_HIDDEN);
     return;
   }
   lv_obj_clear_flag(objects.setup_panel, LV_OBJ_FLAG_HIDDEN);
-  if (objects.quick_menu_panel) lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
-  if (objects.vario_meter)      lv_obj_add_flag(objects.vario_meter, LV_OBJ_FLAG_HIDDEN);
-  if (objects.lbl_alt)          lv_obj_add_flag(objects.lbl_alt, LV_OBJ_FLAG_HIDDEN);
-  if (objects.lbl_vario)        lv_obj_add_flag(objects.lbl_vario, LV_OBJ_FLAG_HIDDEN);
-  if (objects.lbl_vario_int)    lv_obj_add_flag(objects.lbl_vario_int, LV_OBJ_FLAG_HIDDEN);
-  if (objects.img_gps)          lv_obj_add_flag(objects.img_gps, LV_OBJ_FLAG_HIDDEN);
-  if (s_ibLabels[1])            lv_obj_add_flag(s_ibLabels[1], LV_OBJ_FLAG_HIDDEN);
+  if (objects.quick_menu_panel)          lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
+  if (objects.vario_meter)               lv_obj_add_flag(objects.vario_meter, LV_OBJ_FLAG_HIDDEN);
+  if (objects.infobox_display_container) lv_obj_add_flag(objects.infobox_display_container, LV_OBJ_FLAG_HIDDEN);
+  if (objects.img_gps)                   lv_obj_add_flag(objects.img_gps, LV_OBJ_FLAG_HIDDEN);
 
   const SmMenu* m = &SM[g_smMenu];
   lv_label_set_text(objects.settings, m->title);
@@ -1458,21 +1500,25 @@ static void SetupMenu_Apply()
     }
     SetupMenu_HideLists();
     if (objects.setup_panel) lv_obj_add_flag(objects.setup_panel, LV_OBJ_FLAG_HIDDEN);
-    if (objects.vario_meter)   lv_obj_clear_flag(objects.vario_meter, LV_OBJ_FLAG_HIDDEN);
-    if (objects.lbl_alt)       lv_obj_clear_flag(objects.lbl_alt, LV_OBJ_FLAG_HIDDEN);
-    if (objects.lbl_vario)     lv_obj_clear_flag(objects.lbl_vario, LV_OBJ_FLAG_HIDDEN);
-    if (objects.lbl_vario_int) lv_obj_clear_flag(objects.lbl_vario_int, LV_OBJ_FLAG_HIDDEN);
-    if (objects.img_gps)       lv_obj_clear_flag(objects.img_gps, LV_OBJ_FLAG_HIDDEN);
-    if (s_ibLabels[1])         lv_obj_clear_flag(s_ibLabels[1], LV_OBJ_FLAG_HIDDEN);
+    if (objects.vario_meter)               lv_obj_clear_flag(objects.vario_meter, LV_OBJ_FLAG_HIDDEN);
+    if (objects.infobox_display_container) lv_obj_clear_flag(objects.infobox_display_container, LV_OBJ_FLAG_HIDDEN);
+    if (objects.img_gps)                   lv_obj_clear_flag(objects.img_gps, LV_OBJ_FLAG_HIDDEN);
     return;
   }
   if (g_smMenu == SM_INFOBOX_METRIC) {
     IBDBG("[IB] Apply SM_INFOBOX_METRIC zone=%d\n", s_ibZoneSel);
     if (s_ibZoneSel == 2) {
       SmMenu ciMenu = {"Center Mode", CI_LIST, 4};
+      lv_label_set_text(objects.settings, ciMenu.title);
       SetupMenu_RenderList(objects.center_info_list, s_ciListNames, s_ciListVals, &ciMenu);
     } else {
-      SetupMenu_RenderList(objects.center_info_list_1, s_ibListNames, s_ibListVals, m);
+      // Numerotation visuelle "Infobox 1..5" qui saute la zone 2 (reservee au centre) :
+      // zones 0,1 -> 1,2 ; zones 3,4,5 -> 3,4,5.
+      char title[16];
+      int n = (s_ibZoneSel < 2) ? (s_ibZoneSel + 1) : s_ibZoneSel;
+      snprintf(title, sizeof(title), "Infobox %d", n);
+      lv_label_set_text(objects.settings, title);
+      SetupMenu_RenderList(objects.infobox_list, s_ibListNames, s_ibListVals, m);
     }
     IBDBG("[IB] Apply SM_INFOBOX_METRIC done\n");
     return;
@@ -1592,7 +1638,7 @@ static void menu_onRotate(long delta)
         if (delta > 0) g_sinkSound = true;
         else if (delta < 0) g_sinkSound = false;
         // Envoyer immediatement la commande vers le Calculateur
-        LIM_CMD_SEND(Serial1, g_sinkSound ? LIM_CMD_SINK_SOUND : 0x00);
+        Cmd_SendState();
         break;
     }
     g_menuDirty = true;
@@ -1709,6 +1755,7 @@ static void Link_HandleEncoders(const lim_packet_t* p)
   if (s_b2Debounced && !btn2LongFired && (now - btn2DownTime) > LONG_PRESS_MS) {
     btn2LongFired = true;
     FlightLog_ServerToggle();      // appui long enc2 = WiFi logs ON/OFF
+    g_updateMode = FlightLog_ServerActive();  // garde le toggle "App connect" du menu coherent
   }
   enc2BtnLast = s_b2Debounced;
 }
@@ -1748,11 +1795,13 @@ static void Link_Poll()
         g_pressure = p->pressure;
         g_altitude = altitude_from_qnh(g_pressure, g_qnh);
         g_airspeed = p->airspeed;
+        g_gndSpeed = p->gnd_speed;
+        g_gpsAlt   = p->gps_alt;
         g_gpsOk    = (p->flags & LIM_FLAG_GPS_OK) != 0;
         g_gpsTrack = p->gps_track;
-        // Reconnexion : resync l'etat sink sound vers le calculateur
+        // Reconnexion : resync l'etat des commandes (sink sound + Condor sim) vers le calculateur
         if (!g_linkOk) {
-          LIM_CMD_SEND(Serial1, g_sinkSound ? LIM_CMD_SINK_SOUND : 0x00);
+          Cmd_SendState();
         }
         g_linkOk = true;
         Link_HandleEncoders(p);
@@ -1785,10 +1834,6 @@ static lv_obj_t* Menu_NameLabel(int idx)
 
 static void Menu_LvglSetup()
 {
-  // Altitude : largeur fixe -> l'alignement droite (defini dans EEZ) reprend effet,
-  // le bord droit (et le "m") ne bouge plus quand le nombre de chiffres change.
-  lv_obj_set_width(objects.lbl_alt, 130);
-
   lv_obj_set_pos(objects.item_list, -23, 0);
   lv_obj_set_size(objects.item_list, 360, 345);
   lv_obj_set_scroll_snap_y(objects.item_list, LV_SCROLL_SNAP_NONE);
@@ -1889,8 +1934,8 @@ static void Comp_Apply()
 
   float term = 0.0f;
   if (g_gpsOk) {
-    float v = g_airspeed;                    // vitesse sol GPS (recue du calculateur)
-    vF += (v - vF) * (dt / (0.5f + dt));     // lissage de la vitesse sol
+    float v = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;  // air si pitot, sinon vitesse sol GPS
+    vF += (v - vF) * (dt / (0.5f + dt));     // lissage de la vitesse
     float dVdt = (vF - vPrev) / dt;
     vPrev = vF;
     term = (vF / 9.80665f) * dVdt;           // (V/g)*dV/dt
@@ -1956,6 +2001,55 @@ static void Circling_Apply()
   }
 }
 
+// Avg climb : moyenne glissante du vario compense sur 15/20/30 s (echantillon 1 Hz, recalcul
+// ecran). Remplace la valeur vario_int recue du calculateur pour refleter le reglage Avg climb.
+static void AvgClimb_Apply()
+{
+  static float    ring[30] = {0};
+  static int      filled = 0, head = 0;
+  static uint32_t lastMs = 0;
+  uint32_t now = millis();
+  if (lastMs != 0 && now - lastMs < 1000) return;
+  lastMs = now;
+  ring[head] = isfinite(g_varioComp) ? g_varioComp : 0.0f;
+  head = (head + 1) % 30;
+  if (filled < 30) filled++;
+  int win = (g_avgClimb == 0) ? 15 : (g_avgClimb == 1) ? 20 : 30;
+  if (win > filled) win = filled;
+  float sum = 0.0f;
+  for (int k = 0; k < win; k++) sum += ring[(head - 1 - k + 30) % 30];
+  g_varioAvg = (win > 0) ? sum / win : 0.0f;
+}
+
+// Temps de vol : chrono depuis le decollage. Decollage = vitesse (air ou sol selon la source
+// g_airspeed) > 40 km/h pendant 3 s ; atterrissage = < 10 km/h pendant 30 s.
+static void FlightTime_Apply()
+{
+  static uint32_t aboveSince = 0, belowSince = 0;
+  uint32_t now = millis();
+  float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // air si pitot, sinon vitesse sol GPS
+  if (!g_inFlight) {
+    if (spd > 40.0f) { if (aboveSince == 0) aboveSince = now;
+                       if (now - aboveSince >= 3000) { g_inFlight = true; g_takeoffMs = aboveSince; } }
+    else aboveSince = 0;
+  } else {
+    if (spd < 10.0f) { if (belowSince == 0) belowSince = now;
+                       if (now - belowSince >= 30000) g_inFlight = false; }
+    else belowSince = 0;
+  }
+}
+
+// Gain d'altitude du thermique courant : remis a 0 a chaque entree en spirale, suit
+// (alt - alt_entree) tant qu'on spirale, fige la derniere valeur en vol droit.
+static void ClimbGain_Apply()
+{
+  static bool  prevCirc = false;
+  static float entryAlt = 0.0f;
+  if (g_circling && !prevCirc) { entryAlt = g_altitude; g_climbGain = 0.0f; }
+  if (g_circling) g_climbGain = g_altitude - entryAlt;
+  prevCirc = g_circling;
+}
+
 #if SIM_THERMAL
 // Simulation de banc : faux planeur spiralant (droite) dans un thermique decentre.
 // Injecte track/vario synthetiques -> thermal helper visible sans GPS ni vol.
@@ -2011,7 +2105,7 @@ static void Needles_Apply()
   // observe au boot du 2 juillet 2026 (fus=+201.30 -> aiguille hors cadran -> freeze
   // ~2s plus tard). isfinite() + clamp a une plage realiste (planeur : +/-15 m/s).
   float v  = isfinite(g_varioComp) ? g_varioComp : 0.0f;  // aiguille = vario compense GPS
-  float vi = isfinite(g_varioInt)  ? g_varioInt  : 0.0f;
+  float vi = isfinite(g_varioAvg)  ? g_varioAvg  : 0.0f;
   if (v  >  15.0f) v  =  15.0f; else if (v  < -15.0f) v  = -15.0f;
   if (vi >  15.0f) vi =  15.0f; else if (vi < -15.0f) vi = -15.0f;
   int vm  = ((int)(v  * 1000.0f) / 100) * 100;            // pas de 0.1 m/s
@@ -2122,49 +2216,30 @@ static void MC_Apply()
 }
 
 // Cree/positionne une fois les labels Info Boxes (appele depuis setup(), AVANT le
-// premier rendu).
-// ATTENTION (1er juillet 2026, gel intermittent) : creer le label "zone 1" (milieu,
-// seul label PAS issu d'EEZ, cree a chaud via lv_label_create) + repositionner les 3
-// labels EEZ redeclenche des gels d'ecran par intermittence, meme avec le buffer plein
-// ecran (cf LVGL_Driver.cpp). Desactive par securite en attendant une vraie
-// investigation -> zone 1 (milieu) indisponible, les 3 autres box gardent leur
-// position/taille EEZ d'origine (pas recentrees dans les zones 180px).
+// premier rendu). Les 5 labels sont desormais de vrais objets EEZ, positionnes/stylees
+// dans infobox_display_container (2 juillet 2026, remplace l'ancien systeme a 3 box
+// EEZ + zone 1 desactivee suite aux gels intermittents). Zone 2 = reservee au futur
+// graphique centre (thermal helper/vent), zone 5 reste inutilisee (pas de label EEZ).
 static void Labels_Init()
 {
-  if (s_ibLabels[0] != NULL || !objects.lbl_vario) return;
-  s_ibLabels[0] = objects.lbl_vario;
-  s_ibLabels[2] = objects.lbl_alt;
-  s_ibLabels[3] = objects.lbl_vario_int;
-#if 0
-  // Zone 1 (milieu) n'existait pas en tant que label dedie dans EEZ
-  s_ibLabels[1] = lv_label_create(objects.main);
-  lv_obj_set_pos(s_ibLabels[1], 150, 260);
-  lv_obj_set_size(s_ibLabels[1], 180, 44);
-  lv_obj_set_style_text_color(s_ibLabels[1], lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_text_font(s_ibLabels[1], &lv_font_montserrat_30, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_text_align(s_ibLabels[1], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-  // Centrage des 3 box existantes dans leur zone de 180px
-  lv_obj_set_pos(s_ibLabels[0], 150, 85);
-  lv_obj_set_size(s_ibLabels[0], 180, 45);
-  lv_obj_set_style_text_align(s_ibLabels[0], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-  if (s_ibLabels[2]) {
-    lv_obj_set_pos(s_ibLabels[2], 150, 318);
-    lv_obj_set_size(s_ibLabels[2], 180, 42);
-    lv_obj_set_style_text_align(s_ibLabels[2], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-  }
-  if (s_ibLabels[3]) {
-    lv_obj_set_pos(s_ibLabels[3], 150, 362);
-    lv_obj_set_size(s_ibLabels[3], 180, 42);
-    lv_obj_set_style_text_align(s_ibLabels[3], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
-  }
-#endif
+  if (s_ibLabels[0] != NULL || !objects.lbl_ib_haut_sup) return;
+  s_ibLabels[0] = objects.lbl_ib_haut_sup;
+  s_ibLabels[1] = objects.lbl_ib_haut_inf;
+  s_ibLabels[2] = objects.lbl_ib_bas_cent;   // reserve : toujours IB_EMPTY (g_infoBoxConfig[2])
+  s_ibLabels[3] = objects.lbl_ib_bas_sup;
+  s_ibLabels[4] = objects.lbl_ib_bas_inf;
 }
 
 // Mise a jour des labels numeriques (altitude, vario, vario integre)
 // Maj uniquement quand la valeur change (evite des redraws inutiles)
 // Mise a jour des labels numeriques Info Boxes (4 zones sur le cadran)
+// Position Y (haut du label) de chaque zone dans infobox_display_container, telle que
+// posee par Mael dans EEZ. Le label est en LV_SIZE_CONTENT (largeur = texte) avec un X
+// fixe -> sans recentrage, le bord GAUCHE reste fixe et le texte semble se decaler selon
+// sa longueur. On recentre donc horizontalement (LV_ALIGN_TOP_MID) a chaque changement
+// de texte, comme le fait deja InfoBox_RenderSelect pour les labels de l'editeur.
+static const lv_coord_t IB_LABEL_Y[6] = { 84, 113, 228, 338, 374, 0 };
+
 static void Labels_Apply()
 {
   if (g_menuState != MENU_CLOSED && g_ibEditState == IBEDIT_NONE) return;
@@ -2173,6 +2248,7 @@ static void Labels_Apply()
     if (!s_ibLabels[i]) continue;
     if (g_infoBoxConfig[i] == IB_EMPTY) {
       lv_label_set_text(s_ibLabels[i], "");
+      lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
       continue;
     }
     char buf[32];
@@ -2184,45 +2260,56 @@ static void Labels_Apply()
         break;
       }
       case IB_VARIO_INT: {
-        float vi = isnan(g_varioInt) ? 0.0f : g_varioInt;
+        float vi = isfinite(g_varioAvg) ? g_varioAvg : 0.0f;
         float vid = g_uVert ? vi * 1.94384f : vi;
         snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vid);
         break;
       }
       case IB_MACCREADY: {
-        snprintf(buf, sizeof(buf), "MC %.1f", 1.5f);
+        snprintf(buf, sizeof(buf), "MC %.1f", g_mcTenths / 10.0f);
         break;
       }
-      case IB_ALT_BARO:
-      case IB_ALT_GPS: {
+      case IB_ALT_BARO: {
         float am = g_uAlt ? g_altitude * 3.28084f : g_altitude;
         int a = (int)(am + (am >= 0 ? 0.5f : -0.5f));
         snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a);
         break;
       }
-      case IB_AIRSPEED:
-      case IB_GND_SPEED: {
+      case IB_ALT_GPS: {
+        if (!g_gpsOk || isnan(g_gpsAlt)) { snprintf(buf, sizeof(buf), "--- %s", g_uAlt ? "ft" : "m"); break; }
+        float am = g_uAlt ? g_gpsAlt * 3.28084f : g_gpsAlt;
+        int a = (int)(am + (am >= 0 ? 0.5f : -0.5f));
+        snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a);
+        break;
+      }
+      case IB_AIRSPEED: {
         float s = g_uSpeed ? g_airspeed * 0.539957f : g_airspeed;
         snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
+      case IB_GND_SPEED: {
+        float gs = isfinite(g_gndSpeed) ? g_gndSpeed : 0.0f;
+        float s = g_uSpeed ? gs * 0.539957f : gs;
+        snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
+        break;
+      }
       case IB_TIME: {
-        snprintf(buf, sizeof(buf), "14:32:05");
+        snprintf(buf, sizeof(buf), "%02u:%02u:%02u",
+                 (unsigned)datetime.hour, (unsigned)datetime.minute, (unsigned)datetime.second);
         break;
       }
       case IB_FLIGHT_TIME: {
-        unsigned long sec = millis() / 1000;
-        unsigned long h = sec / 3600;
-        unsigned long m = (sec % 3600) / 60;
-        snprintf(buf, sizeof(buf), "%02lu:%02lu", h, m);
+        unsigned long sec = g_takeoffMs ? (millis() - g_takeoffMs) / 1000UL : 0UL;
+        snprintf(buf, sizeof(buf), "%02lu:%02lu", sec / 3600UL, (sec % 3600UL) / 60UL);
         break;
       }
       case IB_WIND: {
-        snprintf(buf, sizeof(buf), "NW 25");
+        snprintf(buf, sizeof(buf), "NW 25");   // TODO Lot E : vent estime (derive GPS en spirale)
         break;
       }
       case IB_CLIMB_GAIN: {
-        snprintf(buf, sizeof(buf), "+450 m");
+        int g = (int)(g_climbGain + (g_climbGain >= 0 ? 0.5f : -0.5f));
+        snprintf(buf, sizeof(buf), "%+d m", g);
         break;
       }
       case IB_FLIGHT_LVL: {
@@ -2231,8 +2318,9 @@ static void Labels_Apply()
         break;
       }
       case IB_GLIDE: {
-        if (g_airspeed > 20.0f && g_varioFused < -0.1f) {
-          float ld = (g_airspeed / 3.6f) / (-g_varioFused);
+        float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // air si pitot, sinon vitesse sol
+        if (spd > 20.0f && g_varioFused < -0.1f) {
+          float ld = (spd / 3.6f) / (-g_varioFused);
           if (ld > 199.0f) ld = 199.0f;
           snprintf(buf, sizeof(buf), "L/D %.0f", ld);
         } else {
@@ -2245,6 +2333,7 @@ static void Labels_Apply()
         break;
     }
     lv_label_set_text(s_ibLabels[i], buf);
+    lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
   }
 
   // Indicateur GPS : image connecte / waiting selon le fix recu du calculateur
@@ -2285,6 +2374,21 @@ void Driver_Loop(void *parameter)
     g_varioFused = VarioFusion_Step(Accel.x, Accel.y, Accel.z,
                                     Gyro.x,  Gyro.y,  Gyro.z,
                                     g_pressure, newBaro, g_vario);
+
+    // Filtre vario utilisateur (menu Vario > Vario filter : Fast/Med/Slow) : lissage EMA
+    // du vario fusionne. Affecte l'aiguille (via g_varioComp) ET le son (via g_varioFused).
+    {
+      static uint32_t lastF = 0;
+      uint32_t nf  = micros();
+      float    dtf = (lastF == 0) ? 0.02f : (nf - lastF) * 1e-6f;
+      lastF = nf;
+      if (dtf > 0.5f) dtf = 0.5f;
+      float tau = (g_varioFilter == 0) ? 0.4f : (g_varioFilter == 1) ? 1.0f : 2.0f;  // s
+      float a   = dtf / (tau + dtf);
+      if (isnan(g_varioFiltered) || !isfinite(g_varioFused)) g_varioFiltered = g_varioFused;
+      else g_varioFiltered += a * (g_varioFused - g_varioFiltered);
+      g_varioFused = g_varioFiltered;
+    }
 
     if (++slow >= 5) {              // RTC + batterie : ~10 Hz suffit
       slow = 0;
@@ -2342,6 +2446,12 @@ void setup()
   Serial.println(">> FlightLog_Init"); FlightLog_Init();
   Serial.println(">> Lvgl_Init");      Lvgl_Init();
   Serial.println(">> ui_init");        ui_init();   // EEZ cree les ecrans (splash + main)
+  // Fond de l'ecran principal aligne sur la couleur du center_hub (0x1f333e) : l'image de
+  // fond du cadran (TRUE_COLOR_ALPHA) a des zones semi-transparentes qui, composees sur le
+  // noir par defaut, paraissaient plus foncees que le hub opaque -> difference visible en
+  // RGB565 (invisible dans EEZ). Compose sur 0x1f333e, ces zones rendent exactement la meme
+  // couleur que le hub. (EEZ regenere screens.c en 0x000000 -> on force ici a chaque boot.)
+  lv_obj_set_style_bg_color(objects.main, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
 
   Serial.println(">> Menu_LvglSetup"); Menu_LvglSetup();
   Serial.println(">> SetupMenu_Init"); SetupMenu_Init();
@@ -2396,6 +2506,9 @@ void loop()
   if (!s_soundCfgSent && millis() > 2000) { SoundCfg_Send(); s_soundCfgSent = true; }
   Comp_Apply();     // compensation TE GPS (vitesse recue du calculateur) -> g_varioComp
   Circling_Apply(); // detection spirale / vol droit -> g_circling + g_turnDir
+  AvgClimb_Apply();  // moyenne glissante du vario (Avg climb) -> g_varioAvg
+  FlightTime_Apply();// detection decollage / atterrissage -> g_takeoffMs / g_inFlight
+  ClimbGain_Apply(); // gain d'altitude du thermique courant -> g_climbGain
 #if SIM_THERMAL
   Sim_Thermal_Step();   // banc : injecte un faux thermique (SIM_THERMAL=1)
 #else

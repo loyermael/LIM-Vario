@@ -78,6 +78,7 @@ static uint32_t bootMs    = 0;   // Startup delay timestamp to ignore sensor boo
 static float    g_simVz    = 0.0f;   // Simulated thermal vario (SIM_VARIO)
 static float    g_simTrack = NAN;    // Simulated ground track heading streamed to display
 static float    g_lastGoodP_pa = NAN; // Last plausible raw pressure (outlier rejection, see below)
+static bool     g_condorEnabled = false; // Condor telemetry honored only when display enables it (Condor sim toggle)
 
 // ---- Volume Control (ENC2) ----
 static uint8_t  sndVol   = 0;   // Current acoustic volume 0..20 (default 0 = muted at boot)
@@ -170,7 +171,8 @@ static void Cmd_Poll() {
         if (lim_cmd_check(c)) {
           bool sinkOn = (c->cmd & LIM_CMD_SINK_SOUND) != 0;
           varioSound.setSinkAlarm(sinkOn);
-          Serial.printf("[cmd] SinkSound=%s\n", sinkOn ? "Full" : "Mute");
+          g_condorEnabled = (c->cmd & LIM_CMD_CONDOR) != 0;
+          Serial.printf("[cmd] SinkSound=%s Condor=%s\n", sinkOn ? "Full" : "Mute", g_condorEnabled ? "ON" : "OFF");
         }
       } else {                                        // ---- Audio Settings (pitch/wave/spread) ----
         const lim_scfg_t* s = (const lim_scfg_t*)buf;
@@ -316,7 +318,7 @@ void loop() {
 #endif
 
   // --- CONDOR Sim Mode (UDP): replaces barometric vario with Condor evario ---
-  if (GpsLink_CondorActive()) {
+  if (g_condorEnabled && GpsLink_CondorActive()) {
     vario_te  = GpsLink_Vario();                       // Condor evario
     vario_int = ema(vario_int, vario_te, dt, 20.0f);
     varioSound.setVz(vario_te);                        // -> speaker follows Condor
@@ -343,19 +345,24 @@ void loop() {
   pkt.pressure   = p_pa;                            // Display unit computes altitude from QNH
   pkt.vario      = vario_te;                        // = uncompensated baro vario if no MS4525
   pkt.vario_int  = vario_int;
-  // airspeed = MS4525 pitot speed if equipped, otherwise GPS ground speed (for screen-side TE comp)
   bool gpsOk     = GpsLink_HasFix();
-  pkt.airspeed   = hasSpeed ? spd_f : (gpsOk ? GpsLink_GroundSpeed() : 0.0f);
+  // airspeed = true air speed (MS4525 pitot) only, 0 if no pitot. Ground speed sent separately.
+  pkt.airspeed   = hasSpeed ? spd_f : 0.0f;
+  pkt.gnd_speed  = gpsOk ? GpsLink_GroundSpeed() : 0.0f;  // GPS ground speed (screen-side TE comp)
+  pkt.gps_alt    = gpsOk ? GpsLink_Altitude() : NAN;      // GPS altitude (separate from baro)
   pkt.gps_track  = gpsOk ? GpsLink_Track() : NAN;   // Ground track heading for circling/wind UI
 #if SIM_VARIO
   gpsOk          = true;           // SIM provides heading + speed -> activates circling mode on display
   pkt.airspeed   = 25.0f;          // Constant airspeed (dV/dt ~ 0, avoids false TE compensation spikes)
+  pkt.gnd_speed  = 25.0f;          // Constant -> preserves screen-side TE comp behavior in SIM
   pkt.gps_track  = g_simTrack;     // Rotating heading -> Circling_Apply + thermal helper ring
 #endif
-  if (GpsLink_CondorActive()) {
+  if (g_condorEnabled && GpsLink_CondorActive()) {
     // Pressure coherent with Condor altitude -> display AHRS fusion derives correct climb rate
-    pkt.pressure = P0_PA * powf(1.0f - GpsLink_Altitude() / 44330.0f, 5.255f);
-    pkt.airspeed = 30.0f;          // Constant -> avoids double TE compensation on display side
+    pkt.pressure  = P0_PA * powf(1.0f - GpsLink_Altitude() / 44330.0f, 5.255f);
+    pkt.airspeed  = 30.0f;         // Constant -> avoids double TE compensation on display side
+    pkt.gnd_speed = 30.0f;         // Constant -> preserves screen-side TE comp behavior in Condor
+    pkt.gps_alt   = GpsLink_Altitude();   // Condor altitude
     // pkt.gps_track already assigned from GpsLink_Track() (= compass); gpsOk already true (HasFix)
   }
   pkt.enc1_count = (ENC1_REVERSE ? -1 : 1) * (int32_t)(enc1.getCount() / 4); // detent steps

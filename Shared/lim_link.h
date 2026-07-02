@@ -15,7 +15,7 @@
 
 #define LIM_SYNC0    0xA5
 #define LIM_SYNC1    0x5A
-#define LIM_VERSION  3           // v3 : added gps_track (ground course) for thermaling/wind
+#define LIM_VERSION  4           // v4 : added gps_alt + gnd_speed (separate baro/GPS alt and air/ground speed)
 #define LIM_BAUD     115200      // UART link baud rate (reliable across both ESP32s)
 
 // Flags field bits (Calculator -> Display frame)
@@ -25,6 +25,7 @@
 
 // Cmd field bits (Display -> Calculator frame)
 #define LIM_CMD_SINK_SOUND 0x01  // 1 = sink tone active (Full), 0 = silent (Mute)
+#define LIM_CMD_CONDOR     0x02  // 1 = honor Condor UDP/serial telemetry, 0 = ignore (real-flight GPS/baro)
 
 #pragma pack(push, 1)
 typedef struct {
@@ -37,6 +38,8 @@ typedef struct {
   float    vario_int;   // m/s (integrated over ~20 s)
   float    airspeed;    // m/s
   float    gps_track;   // ground course (track) in degrees 0..360 (NaN if no fix)
+  float    gps_alt;     // GPS altitude in meters (NaN if no fix)
+  float    gnd_speed;   // GPS ground speed, same unit as airspeed (0 if no fix)
   int32_t  enc1_count;  // cumulative encoder 1 step count
   int32_t  enc2_count;  // cumulative encoder 2 step count
   uint8_t  enc1_btn;    // encoder 1 button state (1 = pressed)

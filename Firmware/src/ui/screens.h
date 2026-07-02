@@ -21,9 +21,12 @@ typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *vario_meter;
     lv_obj_t *center_hub;
-    lv_obj_t *lbl_alt;
-    lv_obj_t *lbl_vario_int;
-    lv_obj_t *lbl_vario;
+    lv_obj_t *infobox_display_container;
+    lv_obj_t *lbl_ib_haut_sup;
+    lv_obj_t *lbl_ib_haut_inf;
+    lv_obj_t *lbl_ib_bas_cent;
+    lv_obj_t *lbl_ib_bas_sup;
+    lv_obj_t *lbl_ib_bas_inf;
     lv_obj_t *img_gps;
     lv_obj_t *quick_menu_panel;
     lv_obj_t *item_list;
@@ -142,8 +145,8 @@ typedef struct _objects_t {
     lv_obj_t *cname1;
     lv_obj_t *cname2;
     lv_obj_t *prname5_1;
-    lv_obj_t *center_info_list_1;
-    lv_obj_t *ibname12;
+    lv_obj_t *infobox_list;
+    lv_obj_t *ibname15;
     lv_obj_t *ibname0;
     lv_obj_t *ibname1;
     lv_obj_t *ibname2;
@@ -156,6 +159,8 @@ typedef struct _objects_t {
     lv_obj_t *ibname9;
     lv_obj_t *ibname10;
     lv_obj_t *ibname11;
+    lv_obj_t *ibname13;
+    lv_obj_t *ibname14;
     lv_obj_t *infobox_editor_container;
     lv_obj_t *ib_frame_0;
     lv_obj_t *ib_val_0;
@@ -168,6 +173,7 @@ typedef struct _objects_t {
     lv_obj_t *ib_frame_4;
     lv_obj_t *ib_val_4;
     lv_obj_t *ib_frame_5;
+    lv_obj_t *ib_frame_6;
 } objects_t;
 
 extern objects_t objects;

@@ -21,6 +21,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <time.h>
+#include <ctype.h>
 
 #include "lvgl.h"
 #include "screens.h"
@@ -196,6 +197,28 @@ static void Profile_Delete(int idx) {
   if (idx == g_profileIdx) Profile_Load(idx);
 }
 
+static bool Profile_IsUsed(int idx) { return g_profiles[idx].used && g_profiles[idx].name[0] != 0; }
+
+/* Fait defiler "Profile" en ne montrant que les profils reellement nommes (identique
+ * a main.cpp, corrige 3 juillet 2026) -- masque les emplacements "Empty" en navigation
+ * normale, "New" reste le seul moyen d'en atteindre un vide pour lui donner un nom. */
+static void Profile_SelectNext(int d) {
+  int step = (d > 0) ? 1 : -1;
+  int idx  = g_profileIdx;
+  bool anyUsed = false;
+  for (int i = 0; i < 5; i++) if (Profile_IsUsed(i)) { anyUsed = true; break; }
+  if (anyUsed) {
+    for (int tries = 0; tries < 5; tries++) {
+      idx = (idx + step + 5) % 5;
+      if (Profile_IsUsed(idx)) break;
+    }
+  } else {
+    idx = (idx + step + 5) % 5;
+  }
+  g_profileIdx = idx;
+  Profile_Load(g_profileIdx);
+}
+
 static void Config_Save(void) { /* no-op : pas de NVS sur PC, tout reste en RAM */ }
 static void Config_Load(void) { GliderDB_LoadDefault(); }
 
@@ -209,7 +232,7 @@ enum { SET_NONE, SET_HELPER, SET_BRIGHT, SET_VOLUME, SET_SINK, SET_LOGGER, SET_C
        SET_VFILTER, SET_VAVG, SET_UPDATE, SET_CONDORSIM, SET_FWVER, SET_BUILD, SET_LINKVER, SET_CREATOR, SET_ALGO,
        SET_APPCONNECT, SET_RESET_CFG, SET_FACTORY_RESET,
        SET_GLIDER_MODEL, SET_GLIDER_EMPTY_WT, SET_GLIDER_MAX_BAL, SET_GLIDER_V1, SET_GLIDER_SI1, SET_GLIDER_V2, SET_GLIDER_SI2, SET_GLIDER_V3, SET_GLIDER_SI3,
-       SET_PROFILE_SELECT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
+       SET_PROFILE_SELECT, SET_PROFILE_EDIT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
 
 #define LIM_FW_SCREEN "0.8.0"
 #define LIM_VERSION 4
@@ -243,12 +266,12 @@ static const SmItem GLIT[] = {
   {"Polar V1",ST_VALUE,SET_GLIDER_V1},{"Polar Si1",ST_VALUE,SET_GLIDER_SI1},{"Polar V2",ST_VALUE,SET_GLIDER_V2},
   {"Polar Si2",ST_VALUE,SET_GLIDER_SI2},{"Polar V3",ST_VALUE,SET_GLIDER_V3},{"Polar Si3",ST_VALUE,SET_GLIDER_SI3},{"Back",ST_BACK,0}
 };
-static const SmItem PRIT[] = { {"Profile",ST_CHOICE,SET_PROFILE_SELECT},{"New",ST_INFO,SET_PROFILE_NEW},{"Save",ST_INFO,SET_PROFILE_SAVE},{"Delete",ST_INFO,SET_PROFILE_DELETE},{"Back",ST_BACK,0} };
+static const SmItem PRIT[] = { {"Profile",ST_CHOICE,SET_PROFILE_SELECT},{"Edit",ST_INFO,SET_PROFILE_EDIT},{"New",ST_INFO,SET_PROFILE_NEW},{"Save",ST_INFO,SET_PROFILE_SAVE},{"Delete",ST_INFO,SET_PROFILE_DELETE},{"Back",ST_BACK,0} };
 
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
   {"System",SYIT,6},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,5},{"Select Metric",IBIT_LIST,15}
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,15}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -265,7 +288,7 @@ static lv_obj_t* s_vName[4] = {0};  static lv_obj_t* s_vVal[4]  = {0};
 static lv_obj_t* s_syName[6] = {0}; static lv_obj_t* s_syVal[6]  = {0};
 static lv_obj_t* s_abName[4] = {0}; static lv_obj_t* s_abVal[4]  = {0};
 static lv_obj_t* s_glName[10] = {0};static lv_obj_t* s_glVal[10]  = {0};
-static lv_obj_t* s_prName[5]  = {0};static lv_obj_t* s_prVal[5]   = {0};
+static lv_obj_t* s_prName[6]  = {0};static lv_obj_t* s_prVal[6]   = {0};
 static lv_obj_t* s_imName[3] = {0}; static lv_obj_t* s_imVal[3] = {0};
 static lv_obj_t* s_ibListNames[15] = {0}; static lv_obj_t* s_ibListVals[15] = {0};
 static lv_obj_t* s_ciListNames[4] = {0};  static lv_obj_t* s_ciListVals[4] = {0};
@@ -277,30 +300,21 @@ static lv_obj_t* s_confirmNo    = NULL;
 static int8_t g_smConfirm  = -1;
 static bool   g_confirmSel = false;
 
-/* Clavier de saisie (Profile New/Save) */
-static lv_obj_t* s_kbContainer = NULL;
-static lv_obj_t* s_kbTextArea  = NULL;
-static lv_obj_t* s_kbKeyboard  = NULL;
-static lv_group_t* s_kbGroup   = NULL;
+/* Editeur de nom de profil : 5 cases de caractere + cases OK/Cancel, navigation
+ * 100% encodeur (remplace l'ancien clavier LVGL AZERTY -- identique a main.cpp). */
+static lv_obj_t* s_pnContainer = NULL;
+static lv_obj_t* s_pnBox[5]    = {0};
+static lv_obj_t* s_pnSlot[5]   = {0};
+static lv_obj_t* s_pnOkBox     = NULL;
+static lv_obj_t* s_pnCancelBox = NULL;
+static lv_obj_t* s_pnWarn      = NULL;
+static char      s_pnBuf[6]    = {0};
+static int8_t    s_pnCursor    = 0;
+static bool      s_pnCharEdit  = false;
 
-static const char* s_kbMapLc[] = {
-  "1#", "a", "z", "e", "r", "t", "y", "u", "i", "o", "p", LV_SYMBOL_BACKSPACE, "\n",
-  "ABC", "q", "s", "d", "f", "g", "h", "j", "k", "l", LV_SYMBOL_NEW_LINE, "\n",
-  "_", "-", "m", "w", "x", "c", "v", "b", "n", ".", ",", ":", "\n",
-  LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""
-};
-static const char* s_kbMapUc[] = {
-  "1#", "A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P", LV_SYMBOL_BACKSPACE, "\n",
-  "abc", "Q", "S", "D", "F", "G", "H", "J", "K", "L", LV_SYMBOL_NEW_LINE, "\n",
-  "_", "-", "M", "W", "X", "C", "V", "B", "N", ".", ",", ":", "\n",
-  LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""
-};
-static const lv_btnmatrix_ctrl_t s_kbCtrlMap[] = {
-  LV_KEYBOARD_CTRL_BTN_FLAGS | 5, (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), LV_BTNMATRIX_CTRL_CHECKED | 7,
-  LV_KEYBOARD_CTRL_BTN_FLAGS | 6, (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), LV_BTNMATRIX_CTRL_CHECKED | 7,
-  LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1),
-  LV_KEYBOARD_CTRL_BTN_FLAGS | 2, LV_BTNMATRIX_CTRL_CHECKED | 2, 6, LV_BTNMATRIX_CTRL_CHECKED | 2, LV_KEYBOARD_CTRL_BTN_FLAGS | 2
-};
+/* Espace en premier = case "vide" (permet un nom < 5 caracteres). */
+static const char PN_CHARSET[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+#define PN_CHARSET_LEN ((int)(sizeof(PN_CHARSET) - 1))
 
 /* Forward declarations (ordre d'appel croise) */
 static void SetupMenu_Back(void);
@@ -311,27 +325,67 @@ static void Confirm_Show(int8_t action);
 static void Confirm_Hide(void);
 static void Profile_ShowKeyboard(bool isNew);
 
-static void kb_event_cb(lv_event_t* e) {
-  lv_event_code_t code = lv_event_get_code(e);
-  if (code == LV_EVENT_READY) {
-    const char* txt = lv_textarea_get_text(s_kbTextArea);
-    if (txt && strlen(txt) > 0) {
-      strncpy(g_profiles[g_profileIdx].name, txt, sizeof(g_profiles[g_profileIdx].name) - 1);
-      strncpy(g_profileName, txt, sizeof(g_profileName) - 1);
-      Profile_Save(g_profileIdx);
-    }
-    if (s_kbContainer) { lv_obj_del(s_kbContainer); s_kbContainer = NULL; s_kbTextArea = NULL; s_kbKeyboard = NULL; }
-    if (s_kbGroup)     { lv_group_del(s_kbGroup);   s_kbGroup     = NULL; }
-    g_smDirty = true;
-  } else if (code == LV_EVENT_CANCEL) {
-    if (s_kbContainer) { lv_obj_del(s_kbContainer); s_kbContainer = NULL; s_kbTextArea = NULL; s_kbKeyboard = NULL; }
-    if (s_kbGroup)     { lv_group_del(s_kbGroup);   s_kbGroup     = NULL; }
-    g_smDirty = true;
+static bool ProfileName_IsDuplicate(const char* candidate) {
+  for (int i = 0; i < 5; i++) {
+    if (i == g_profileIdx || !g_profiles[i].used) continue;
+    const char* a = g_profiles[i].name;
+    const char* b = candidate;
+    bool eq = true;
+    while (*a && *b) { if (toupper((unsigned char)*a) != toupper((unsigned char)*b)) { eq = false; break; } a++; b++; }
+    if (eq && *a == 0 && *b == 0) return true;
+  }
+  return false;
+}
+
+static void ProfileName_Render(void) {
+  for (int i = 0; i < 5; i++) {
+    if (!s_pnBox[i]) continue;
+    char t[2] = { s_pnBuf[i], 0 };
+    lv_label_set_text(s_pnSlot[i], t);
+    bool sel     = (s_pnCursor == i);
+    bool editing = sel && s_pnCharEdit;
+    lv_obj_set_style_border_color(s_pnBox[i],
+      lv_color_hex(editing ? 0xfbd500 : (sel ? 0xffffff : 0x666666)), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(s_pnBox[i], sel ? 3 : 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(s_pnBox[i],
+      lv_color_hex(editing ? 0x3a3000 : 0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  }
+  if (s_pnOkBox) {
+    bool sel = (s_pnCursor == 5);
+    lv_obj_set_style_border_color(s_pnOkBox, lv_color_hex(sel ? 0xfbd500 : 0x2f8f2f), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(s_pnOkBox, sel ? 3 : 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+  }
+  if (s_pnCancelBox) {
+    bool sel = (s_pnCursor == 6);
+    lv_obj_set_style_border_color(s_pnCancelBox, lv_color_hex(sel ? 0xfbd500 : 0xc0392b), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(s_pnCancelBox, sel ? 3 : 2, LV_PART_MAIN | LV_STATE_DEFAULT);
   }
 }
 
+static void ProfileName_Close(void) {
+  if (s_pnContainer) { lv_obj_del(s_pnContainer); s_pnContainer = NULL; }
+  for (int i = 0; i < 5; i++) { s_pnBox[i] = NULL; s_pnSlot[i] = NULL; }
+  s_pnOkBox = NULL; s_pnCancelBox = NULL; s_pnWarn = NULL;
+  g_smDirty = true;
+}
+
+static void ProfileName_Confirm(void) {
+  char out[6];
+  memcpy(out, s_pnBuf, 6);
+  for (int i = 4; i >= 0; i--) { if (out[i] == ' ') out[i] = 0; else break; }
+  if (strlen(out) == 0) { ProfileName_Close(); return; }
+  if (ProfileName_IsDuplicate(out)) {
+    if (s_pnWarn) { lv_label_set_text(s_pnWarn, "Name already exists"); lv_obj_clear_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN); }
+    return;
+  }
+  strncpy(g_profiles[g_profileIdx].name, out, sizeof(g_profiles[g_profileIdx].name) - 1);
+  strncpy(g_profileName, out, sizeof(g_profileName) - 1);
+  Profile_Save(g_profileIdx);
+  ProfileName_Close();
+}
+
 static void Profile_ShowKeyboard(bool isNew) {
-  if (s_kbContainer) return;
+  if (s_pnContainer) return;
   if (isNew) {
     int found = -1;
     for (int i = 0; i < 5; i++) if (!g_profiles[i].used) { found = i; break; }
@@ -339,45 +393,101 @@ static void Profile_ShowKeyboard(bool isNew) {
     Profile_Load(g_profileIdx);
   }
 
-  s_kbContainer = lv_obj_create(objects.main);
-  lv_obj_set_size(s_kbContainer, 480, 480);
-  lv_obj_set_pos(s_kbContainer, 0, 0);
-  lv_obj_set_style_bg_color(s_kbContainer, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_bg_opa(s_kbContainer, LV_OPA_90, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_border_width(s_kbContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_radius(s_kbContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+  const char* src;
+  char defaultName[16];
+  if (g_profiles[g_profileIdx].used && !isNew) {
+    src = g_profiles[g_profileIdx].name;
+  } else {
+    snprintf(defaultName, sizeof(defaultName), "PROF%d", g_profileIdx + 1);
+    src = defaultName;
+  }
+  size_t srcLen = strlen(src);
+  for (int i = 0; i < 5; i++) s_pnBuf[i] = ((size_t)i < srcLen) ? (char)toupper((unsigned char)src[i]) : ' ';
+  s_pnBuf[5] = 0;
+  s_pnCursor   = 0;
+  s_pnCharEdit = false;
 
-  lv_obj_t* title = lv_label_create(s_kbContainer);
-  lv_label_set_text(title, "Profile Name (max 5 chars):");
+  s_pnContainer = lv_obj_create(objects.main);
+  lv_obj_set_size(s_pnContainer, 480, 480);
+  lv_obj_set_pos(s_pnContainer, 0, 0);
+  lv_obj_set_style_bg_color(s_pnContainer, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_opa(s_pnContainer, LV_OPA_90, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(s_pnContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_radius(s_pnContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_clear_flag(s_pnContainer, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* title = lv_label_create(s_pnContainer);
+  lv_label_set_text(title, "Profile name");
   lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 90);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 150);
 
-  s_kbTextArea = lv_textarea_create(s_kbContainer);
-  lv_textarea_set_one_line(s_kbTextArea, true);
-  lv_textarea_set_max_length(s_kbTextArea, 5);
-  lv_obj_set_size(s_kbTextArea, 200, 50);
-  lv_obj_set_style_text_font(s_kbTextArea, &lv_font_montserrat_28, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_align(s_kbTextArea, LV_ALIGN_TOP_MID, 0, 140);
-
-  if (g_profiles[g_profileIdx].used && !isNew) {
-    lv_textarea_set_text(s_kbTextArea, g_profiles[g_profileIdx].name);
-  } else {
-    char defaultName[16]; snprintf(defaultName, sizeof(defaultName), "PROF%d", g_profileIdx + 1);
-    lv_textarea_set_text(s_kbTextArea, defaultName);
+  const int boxW = 50, boxH = 60, gap = 10;
+  const int totalW = 5 * boxW + 4 * gap;
+  const int startX = (480 - totalW) / 2;
+  for (int i = 0; i < 5; i++) {
+    lv_obj_t* box = lv_obj_create(s_pnContainer);
+    lv_obj_set_size(box, boxW, boxH);
+    lv_obj_set_pos(box, startX + i * (boxW + gap), 210);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(box, lv_color_hex(0x666666), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(box, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(box, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* lbl = lv_label_create(box);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_34, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_center(lbl);
+    s_pnBox[i]  = box;
+    s_pnSlot[i] = lbl;
   }
 
-  s_kbKeyboard = lv_keyboard_create(s_kbContainer);
-  lv_keyboard_set_map(s_kbKeyboard, LV_KEYBOARD_MODE_TEXT_LOWER, s_kbMapLc, s_kbCtrlMap);
-  lv_keyboard_set_map(s_kbKeyboard, LV_KEYBOARD_MODE_TEXT_UPPER, s_kbMapUc, s_kbCtrlMap);
-  lv_keyboard_set_textarea(s_kbKeyboard, s_kbTextArea);
-  lv_obj_set_size(s_kbKeyboard, 380, 200);
-  lv_obj_align(s_kbKeyboard, LV_ALIGN_BOTTOM_MID, 0, -60);
-  lv_obj_add_event_cb(s_kbKeyboard, kb_event_cb, LV_EVENT_ALL, NULL);
+  const int btnW = 90, btnGap = 20;
+  const int btnStartX = (480 - (2 * btnW + btnGap)) / 2;
 
-  s_kbGroup = lv_group_create();
-  lv_group_add_obj(s_kbGroup, s_kbKeyboard);
-  lv_group_focus_obj(s_kbKeyboard);
+  s_pnOkBox = lv_obj_create(s_pnContainer);
+  lv_obj_set_size(s_pnOkBox, btnW, 50);
+  lv_obj_set_pos(s_pnOkBox, btnStartX, 300);
+  lv_obj_set_style_bg_color(s_pnOkBox, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_color(s_pnOkBox, lv_color_hex(0x2f8f2f), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(s_pnOkBox, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_radius(s_pnOkBox, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_clear_flag(s_pnOkBox, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* okLbl = lv_label_create(s_pnOkBox);
+  lv_label_set_text(okLbl, "OK");
+  lv_obj_set_style_text_color(okLbl, lv_color_hex(0x2f8f2f), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(okLbl, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_center(okLbl);
+
+  s_pnCancelBox = lv_obj_create(s_pnContainer);
+  lv_obj_set_size(s_pnCancelBox, btnW, 50);
+  lv_obj_set_pos(s_pnCancelBox, btnStartX + btnW + btnGap, 300);
+  lv_obj_set_style_bg_color(s_pnCancelBox, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_color(s_pnCancelBox, lv_color_hex(0xc0392b), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(s_pnCancelBox, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_radius(s_pnCancelBox, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_clear_flag(s_pnCancelBox, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* cancelLbl = lv_label_create(s_pnCancelBox);
+  lv_label_set_text(cancelLbl, "Cancel");
+  lv_obj_set_style_text_color(cancelLbl, lv_color_hex(0xc0392b), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(cancelLbl, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_center(cancelLbl);
+
+  s_pnWarn = lv_label_create(s_pnContainer);
+  lv_label_set_text(s_pnWarn, "Name already exists");
+  lv_obj_set_style_text_color(s_pnWarn, lv_color_hex(0xff4040), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(s_pnWarn, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align(s_pnWarn, LV_ALIGN_TOP_MID, 0, 360);
+  lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t* hint = lv_label_create(s_pnContainer);
+  lv_label_set_text(hint, "Rotate: move / Press: select - letter\nLong press: cancel");
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x999999), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 395);
+
+  ProfileName_Render();
 }
 
 static void SmToggle(uint8_t s) {
@@ -423,8 +533,7 @@ static void SmAdjust(uint8_t s, long d) {
     case SET_GLIDER_V3:       g_gliderV3 += (int)d; if (g_gliderV3<40) g_gliderV3=40; if (g_gliderV3>300) g_gliderV3=300; break;
     case SET_GLIDER_SI3:      g_gliderSi3 += (float)d * 0.01f; break;
     case SET_PROFILE_SELECT:
-      g_profileIdx = (g_profileIdx + (int)d + 5) % 5;
-      Profile_Load(g_profileIdx);
+      Profile_SelectNext((int)d);
       break;
   }
 }
@@ -516,8 +625,7 @@ static void SetupMenu_Open(void)  { g_setupOpen = true; g_menuState = MENU_CLOSE
 static void SetupMenu_Close(void) {
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); }
   if (g_ibEditState != IBEDIT_NONE) { InfoBox_CloseEdit(); }
-  if (s_kbContainer) { lv_obj_del(s_kbContainer); s_kbContainer = NULL; s_kbTextArea = NULL; s_kbKeyboard = NULL; }
-  if (s_kbGroup)     { lv_group_del(s_kbGroup);   s_kbGroup     = NULL; }
+  if (s_pnContainer) ProfileName_Close();
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
 static void SetupMenu_Back(void)  {
@@ -566,8 +674,20 @@ static void Confirm_Hide(void) {
 }
 
 static void SetupMenu_Rotate(long d) {
-  if (s_kbContainer && s_kbGroup) {
-    for (int i = 0; i < abs((int)d); i++) lv_group_send_data(s_kbGroup, (d > 0) ? LV_KEY_RIGHT : LV_KEY_LEFT);
+  if (s_pnContainer) {
+    if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
+    if (s_pnCharEdit) {
+      int idx = -1;
+      for (int k = 0; k < PN_CHARSET_LEN; k++) if (PN_CHARSET[k] == s_pnBuf[s_pnCursor]) { idx = k; break; }
+      idx = ((idx + (int)d) % PN_CHARSET_LEN + PN_CHARSET_LEN) % PN_CHARSET_LEN;
+      s_pnBuf[s_pnCursor] = PN_CHARSET[idx];
+    } else {
+      int i = (int)s_pnCursor + (int)d;
+      if (i < 0) i = 0;
+      if (i > 6) i = 6;
+      s_pnCursor = (int8_t)i;
+    }
+    ProfileName_Render();
     return;
   }
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
@@ -593,7 +713,14 @@ static void SetupMenu_Rotate(long d) {
 }
 
 static void SetupMenu_Press(void) {
-  if (s_kbContainer && s_kbGroup) { lv_group_send_data(s_kbGroup, LV_KEY_ENTER); return; }
+  if (s_pnContainer) {
+    if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
+    if (s_pnCursor == 5) { ProfileName_Confirm(); return; }
+    if (s_pnCursor == 6) { ProfileName_Close(); return; }
+    s_pnCharEdit = !s_pnCharEdit;
+    ProfileName_Render();
+    return;
+  }
   if (g_smConfirm != -1) {
     if (g_confirmSel) {
       if (g_smConfirm == (int8_t)SET_RESET_CFG || g_smConfirm == (int8_t)SET_FACTORY_RESET) {
@@ -662,7 +789,7 @@ static void SetupMenu_Press(void) {
     case ST_VALUE:
     case ST_CHOICE: g_smEdit = true; break;
     case ST_INFO:
-      if (it->arg == SET_PROFILE_SAVE || it->arg == SET_PROFILE_NEW) { Profile_ShowKeyboard(it->arg == SET_PROFILE_NEW); return; }
+      if (it->arg == SET_PROFILE_SAVE || it->arg == SET_PROFILE_NEW || it->arg == SET_PROFILE_EDIT) { Profile_ShowKeyboard(it->arg == SET_PROFILE_NEW); return; }
       if (it->arg == SET_RESET_CFG || it->arg == SET_FACTORY_RESET || it->arg == SET_PROFILE_DELETE) { Confirm_Show((int8_t)it->arg); return; }
       break;
   }
@@ -736,8 +863,8 @@ static void SetupMenu_Init(void) {
   lv_obj_add_flag(objects.glider_list, LV_OBJ_FLAG_HIDDEN);
 
   s_prName[0]=objects.prname0; s_prVal[0]=objects.prval0; s_prName[1]=objects.prname1; s_prVal[1]=NULL;
-  s_prName[2]=objects.prname2; s_prVal[2]=NULL; s_prName[3]=objects.prname4; s_prVal[3]=NULL;
-  s_prName[4]=objects.prname5; s_prVal[4]=NULL;
+  s_prName[2]=objects.prname2; s_prVal[2]=NULL; s_prName[3]=objects.prname3; s_prVal[3]=NULL;
+  s_prName[4]=objects.prname4; s_prVal[4]=NULL; s_prName[5]=objects.prname5; s_prVal[5]=NULL;
   lv_obj_set_scrollbar_mode(objects.profil_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_HIDDEN);
@@ -935,10 +1062,14 @@ static void SetupMenu_Apply(void) {
     return;
   }
   if (g_smMenu == SM_PROFILE) {
+    /* SetupMenu_RenderList() ecrit un texte generique "Profile N" sur vals[0] (ST_CHOICE
+     * -> SmValTxt(SET_PROFILE_SELECT)) : le nom personnalise doit etre applique APRES,
+     * sinon il est aussitot ecrase (meme bug que main.cpp, corrige 3 juillet 2026). */
+    SetupMenu_RenderList(objects.profil_list, s_prName, s_prVal, m);
     strncpy(g_profileName, g_profiles[g_profileIdx].used ? g_profiles[g_profileIdx].name : "", sizeof(g_profileName)-1);
-    if (g_profileName[0] == 0) snprintf(g_profileName, sizeof(g_profileName), "P%d", g_profileIdx+1);
+    if (g_profileName[0] == 0) snprintf(g_profileName, sizeof(g_profileName), "Empty");
     lv_label_set_text(objects.prval0, g_profileName);
-    SetupMenu_RenderList(objects.profil_list, s_prName, s_prVal, m); return;
+    return;
   }
   SetupMenu_HideLists();
   lv_obj_add_flag(objects.item5, LV_OBJ_FLAG_HIDDEN);
@@ -1085,6 +1216,8 @@ static volatile bool  g_circling   = false;
 static float g_climbGain    = 0.0f;
 static uint32_t g_takeoffMs = 0;
 static bool     g_inFlight  = true;
+static float g_windSpeedKmh = NAN;   /* demo : anime seulement pour previsualiser l'affichage */
+static float g_windDirDeg   = NAN;
 
 static void Comp_Apply(void) {
   static uint64_t lastUs = 0;
@@ -1194,6 +1327,46 @@ static void ClimbGain_Apply(void) {
   prevCirc = g_circling;
 }
 
+/* Meme gating que WindDisplay_Update (main.cpp) : visible en vol droit seulement,
+ * symetrique du Thermal Helper. Valeurs animees en demo (voir SimMenu_FeedDemoTelemetry). */
+static void WindDisplay_Update(void) {
+  bool show = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling
+              && g_gpsOk && !isnan(g_windSpeedKmh);
+  if (objects.lbl_wind_dir) {
+    if (show) {
+      char b[8]; snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      lv_label_set_text(objects.lbl_wind_dir, b);
+      lv_obj_clear_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (objects.lbl_wind_value_speed) {
+    if (show) {
+      char b[8]; snprintf(b, sizeof(b), "%.0f", g_windSpeedKmh);
+      lv_label_set_text(objects.lbl_wind_value_speed, b);
+      lv_obj_clear_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (objects.img_wind_arrow) {
+    if (show) {
+      float rel = g_windDirDeg - g_gpsTrack;
+      while (rel <   0.0f) rel += 360.0f;
+      while (rel >= 360.0f) rel -= 360.0f;
+      lv_img_set_angle(objects.img_wind_arrow, (int16_t)(rel * 10.0f));
+      lv_obj_clear_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (objects.img_glider_wind) {
+    if (show) lv_obj_clear_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
+    else      lv_obj_add_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 /* Genere une fausse telemetrie (sinusoides) pour donner vie a l'affichage. */
 static void SimMenu_FeedDemoTelemetry(double t) {
   g_varioFused = 2.2f * (float)sin(t * 0.6);
@@ -1203,6 +1376,11 @@ static void SimMenu_FeedDemoTelemetry(double t) {
   g_gpsOk      = true;
   g_gpsTrack   = fmodf((float)(t * 8.0), 360.0f);
   g_circling   = (fmod(t, 40.0) < 15.0);
+  /* Demo uniquement : le vrai calcul (derive GPS en spirale) n'existe que sur le vrai
+   * firmware (main.cpp, Wind_Apply). Ici on anime juste pour previsualiser l'affichage
+   * en vol droit (cache pendant la spirale, comme le vrai gating WindDisplay_Update). */
+  g_windSpeedKmh = 18.0f + 6.0f * (float)sin(t * 0.03);
+  g_windDirDeg   = fmodf((float)(t * 3.0), 360.0f);
   if (g_takeoffMs == 0) g_takeoffMs = millis();
 }
 
@@ -1265,6 +1443,7 @@ void SimMenu_Tick(double t) {
   MC_Apply();
   Vol_Apply();
   Labels_Apply();
+  WindDisplay_Update();
   Menu_Apply();
   SetupMenu_Apply();
 }

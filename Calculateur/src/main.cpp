@@ -127,8 +127,7 @@ void setup() {
   pinMode(ENC2_SW, INPUT_PULLUP);
 
   Serial.println("Ready. Streaming UART telemetry to display unit...");
-  bootMs = millis();
-  
+
   // --- Acoustic Vario Synthesizer ---
   varioSound.begin();
   varioSound.setVolume(sndVol);
@@ -139,7 +138,8 @@ void setup() {
   GpsLink_Begin();
 #endif
 
-  lastUs = micros();
+  bootMs  = millis();
+  lastUs  = micros();
 }
 
 // ---- Process incoming control commands from display unit (lim_cmd_t) ----

@@ -1,6 +1,6 @@
 #include "images.h"
 
-const ext_img_desc_t images[9] = {
+const ext_img_desc_t images[11] = {
     { "arrow_mc", &img_arrow_mc },
     { "arrow_thermal", &img_arrow_thermal },
     { "needle_main", &img_needle_main },
@@ -10,4 +10,6 @@ const ext_img_desc_t images[9] = {
     { "GPS_Waiting", &img_gps_waiting },
     { "glider_th", &img_glider_th },
     { "center_hub", &img_center_hub },
+    { "img_glider_wind", &img_img_glider_wind },
+    { "img_wind_arrow", &img_img_wind_arrow },
 };

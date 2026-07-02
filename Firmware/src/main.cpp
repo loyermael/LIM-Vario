@@ -153,7 +153,7 @@ int  g_toneSpread   = 5;      // 0-10, intensite de variation du son selon le va
 uint8_t g_varioFilter = 1;    // 0=Fast 1=Med 2=Slow (affichage seul pour l'instant)
 uint8_t g_avgClimb    = 1;    // 0=15s 1=20s 2=30s (affichage seul pour l'instant)
 static bool g_updateMode     = false;// WiFi OTA update (effet a cabler)
-static bool g_condorSim       = false;// mode simulation Condor (effet a cabler)
+static bool g_condorSim       = false;// mode simulation Condor (bypass fusion IMU/baro dans Comp_Apply)
 
 enum InfoBoxMetric {
   IB_VARIO_INST  = 0,
@@ -170,7 +170,9 @@ enum InfoBoxMetric {
   IB_FLIGHT_LVL  = 11,
   IB_GLIDE       = 12,
   IB_EMPTY       = 13,
-  IB_METRIC_MAX  = 14
+  IB_NETTO       = 14,  // vario compense de la polaire (mouvement de la masse d'air)
+  IB_STF         = 15,  // vitesse optimale de croisiere (MacCready + polaire)
+  IB_METRIC_MAX  = 16
 };
 
 enum CenterZoneMetric {
@@ -214,7 +216,9 @@ static const char* const s_ibMetricNames[IB_METRIC_MAX] = {
   "Climb Gain",
   "Flight Level",
   "Glide Ratio",
-  "Disabled"
+  "Disabled",
+  "Netto",
+  "Speed to Fly"
 };
 
 static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
@@ -231,7 +235,9 @@ static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
   "Climb Gain",
   "Flight Lvl",
   "Glide Ratio",
-  ""
+  "",
+  "Netto",
+  "STF"
 };
 
 static const char* const s_centerMetricAbbrev[CENTER_METRIC_MAX] = {
@@ -402,7 +408,16 @@ static void Profile_Delete(int idx) {
   snprintf(ns, sizeof(ns), "prof_%d", idx);
   Preferences p;
   p.begin(ns, false);
-  p.clear();
+  p.putString("name", "");
+  p.putInt("glidx", 0);
+  p.putInt("glewt", 240);
+  p.putInt("glmbal", 185);
+  p.putInt("glv1", 80);
+  p.putFloat("glsi1", -0.59f);
+  p.putInt("glv2", 115);
+  p.putFloat("glsi2", -0.76f);
+  p.putInt("glv3", 173);
+  p.putFloat("glsi3", -2.00f);
   p.end();
   if (idx == g_profileIdx) {
     Profile_Load(idx);
@@ -502,7 +517,7 @@ enum { SET_NONE, SET_HELPER, SET_BRIGHT, SET_VOLUME, SET_SINK, SET_LOGGER, SET_C
        SET_VFILTER, SET_VAVG, SET_UPDATE, SET_CONDORSIM, SET_FWVER, SET_BUILD, SET_LINKVER, SET_CREATOR, SET_ALGO,
        SET_APPCONNECT, SET_RESET_CFG, SET_FACTORY_RESET,
        SET_GLIDER_MODEL, SET_GLIDER_EMPTY_WT, SET_GLIDER_MAX_BAL, SET_GLIDER_V1, SET_GLIDER_SI1, SET_GLIDER_V2, SET_GLIDER_SI2, SET_GLIDER_V3, SET_GLIDER_SI3,
-       SET_PROFILE_SELECT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
+       SET_PROFILE_SELECT, SET_PROFILE_EDIT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
 
 #define LIM_FW_SCREEN "0.8.0"   // version firmware ecran (menu About)
 
@@ -561,6 +576,7 @@ static const SmItem GLIT[] = {
 };
 static const SmItem PRIT[] = {
   {"Profile",  ST_CHOICE, SET_PROFILE_SELECT},
+  {"Edit",     ST_INFO,   SET_PROFILE_EDIT},
   {"New",      ST_INFO,   SET_PROFILE_NEW},
   {"Save",     ST_INFO,   SET_PROFILE_SAVE},
   {"Delete",   ST_INFO,   SET_PROFILE_DELETE},
@@ -570,7 +586,7 @@ static const SmItem PRIT[] = {
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
   {"System",SYIT,6},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,5},{"Select Metric",IBIT_LIST,15}
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,15}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -594,9 +610,53 @@ static lv_obj_t* s_abName[4] = {0};  // about_list: abname0,1,2,abname5(Back)
 static lv_obj_t* s_abVal[4]  = {0};  // abval0,1,2, NULL(Back)
 static lv_obj_t* s_glName[10] = {0}; // sous-menu Glider info
 static lv_obj_t* s_glVal[10]  = {0};
-static lv_obj_t* s_prName[5]  = {0}; // sous-menu Profile (panel EEZ profil_list)
-static lv_obj_t* s_prVal[5]   = {0};
-static char      g_profileName[8] = {0}; // nom du profil actif (affiche dans prval0)
+static lv_obj_t* s_prName[6]  = {0}; // sous-menu Profile (panel EEZ profil_list)
+static lv_obj_t* s_prVal[6]   = {0};
+static char      g_profileName[8] = {0}; // nom du profil actif (affiche dans prval0 + quick menu)
+
+// Rafraichit g_profileName depuis les Preferences du profil courant (g_profileIdx).
+// Utilise par le setup menu (prval0) et le quick menu (val_profil).
+static void Profile_RefreshName() {
+  char ns[16];
+  snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
+  Preferences p;
+  p.begin(ns, true);
+  String n = p.getString("name", "");
+  p.end();
+  if (n.length() == 0) snprintf(g_profileName, sizeof(g_profileName), "Empty");
+  else { strncpy(g_profileName, n.c_str(), sizeof(g_profileName) - 1); g_profileName[sizeof(g_profileName) - 1] = 0; }
+}
+
+static bool Profile_IsUsed(int idx) {
+  char ns[16];
+  snprintf(ns, sizeof(ns), "prof_%d", idx);
+  Preferences p;
+  p.begin(ns, true);
+  bool used = p.getString("name", "").length() > 0;
+  p.end();
+  return used;
+}
+
+// Fait defiler "Profile" en ne montrant QUE les profils reellement nommes (masque les
+// emplacements "Empty" pendant la navigation normale -- "New" reste le seul moyen d'en
+// atteindre un vide pour lui donner un nom). Si aucun profil n'est encore nomme, defile
+// simplement (rien a sauter).
+static void Profile_SelectNext(int d) {
+  int step = (d > 0) ? 1 : -1;
+  int idx  = g_profileIdx;
+  bool anyUsed = false;
+  for (int i = 0; i < 5; i++) if (Profile_IsUsed(i)) { anyUsed = true; break; }
+  if (anyUsed) {
+    for (int tries = 0; tries < 5; tries++) {
+      idx = (idx + step + 5) % 5;
+      if (Profile_IsUsed(idx)) break;
+    }
+  } else {
+    idx = (idx + step + 5) % 5;
+  }
+  g_profileIdx = idx;
+  Profile_Load(g_profileIdx);
+}
 static lv_obj_t* s_imName[3] = {0}; static lv_obj_t* s_imVal[3] = {0};
 static lv_obj_t* s_ibListNames[15] = {0}; static lv_obj_t* s_ibListVals[15] = {0};
 static lv_obj_t* s_ciListNames[4] = {0}; static lv_obj_t* s_ciListVals[4] = {0};
@@ -631,74 +691,89 @@ static void SmToggle(uint8_t s) {
   }
   Config_Save();
 }
-static lv_obj_t* s_kbContainer = NULL;
-static lv_obj_t* s_kbTextArea = NULL;
-static lv_obj_t* s_kbKeyboard = NULL;
-static lv_group_t* s_kbGroup = NULL;
+// Editeur de nom de profil : 5 cases de caractere + cases OK/Cancel, navigation
+// 100% encodeur (remplace l'ancien clavier LVGL AZERTY, trop lent a l'encodeur).
+static lv_obj_t* s_pnContainer = NULL;
+static lv_obj_t* s_pnBox[5]    = {0};   // cadres des 5 cases
+static lv_obj_t* s_pnSlot[5]   = {0};   // labels des 5 cases
+static lv_obj_t* s_pnOkBox     = NULL;
+static lv_obj_t* s_pnCancelBox = NULL;
+static lv_obj_t* s_pnWarn      = NULL;  // "Name already exists"
+static char      s_pnBuf[6]    = {0};   // 5 caracteres + \0
+static int8_t    s_pnCursor    = 0;     // 0..4 = case caractere, 5 = OK, 6 = Cancel
+static bool      s_pnCharEdit  = false; // true = defilement du caractere de la case courante
 
-// Map AZERTY personnalisée pour le clavier de saisie
-static const char* s_kbMapLc[] = {
-  "1#", "a", "z", "e", "r", "t", "y", "u", "i", "o", "p", LV_SYMBOL_BACKSPACE, "\n",
-  "ABC", "q", "s", "d", "f", "g", "h", "j", "k", "l", LV_SYMBOL_NEW_LINE, "\n",
-  "_", "-", "m", "w", "x", "c", "v", "b", "n", ".", ",", ":", "\n",
-  LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""
-};
+// Espace en premier = case "vide" (permet un nom < 5 caracteres).
+static const char PN_CHARSET[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+#define PN_CHARSET_LEN ((int)(sizeof(PN_CHARSET) - 1))
 
-static const char* s_kbMapUc[] = {
-  "1#", "A", "Z", "E", "R", "T", "Y", "U", "I", "O", "P", LV_SYMBOL_BACKSPACE, "\n",
-  "abc", "Q", "S", "D", "F", "G", "H", "J", "K", "L", LV_SYMBOL_NEW_LINE, "\n",
-  "_", "-", "M", "W", "X", "C", "V", "B", "N", ".", ",", ":", "\n",
-  LV_SYMBOL_KEYBOARD, LV_SYMBOL_LEFT, " ", LV_SYMBOL_RIGHT, LV_SYMBOL_OK, ""
-};
+static bool ProfileName_IsDuplicate(const char* candidate) {
+  for (int i = 0; i < 5; i++) {
+    if (i == g_profileIdx) continue;
+    char ns[16];
+    snprintf(ns, sizeof(ns), "prof_%d", i);
+    Preferences p;
+    p.begin(ns, true);
+    String n = p.getString("name", "");
+    p.end();
+    if (n.length() > 0 && n.equalsIgnoreCase(candidate)) return true;
+  }
+  return false;
+}
 
-static const lv_btnmatrix_ctrl_t s_kbCtrlMap[] = {
-  LV_KEYBOARD_CTRL_BTN_FLAGS | 5, (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), (LV_BTNMATRIX_CTRL_POPOVER | 4), LV_BTNMATRIX_CTRL_CHECKED | 7,
-  LV_KEYBOARD_CTRL_BTN_FLAGS | 6, (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), (LV_BTNMATRIX_CTRL_POPOVER | 3), LV_BTNMATRIX_CTRL_CHECKED | 7,
-  LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1), LV_BTNMATRIX_CTRL_CHECKED | (LV_BTNMATRIX_CTRL_POPOVER | 1),
-  LV_KEYBOARD_CTRL_BTN_FLAGS | 2, LV_BTNMATRIX_CTRL_CHECKED | 2, 6, LV_BTNMATRIX_CTRL_CHECKED | 2, LV_KEYBOARD_CTRL_BTN_FLAGS | 2
-};
-
-static void kb_event_cb(lv_event_t* e) {
-  lv_event_code_t code = lv_event_get_code(e);
-  if (code == LV_EVENT_READY) { // Valider (✓)
-    const char* txt = lv_textarea_get_text(s_kbTextArea);
-    if (txt && strlen(txt) > 0) {
-      char ns[16];
-      snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
-      Preferences p;
-      p.begin(ns, false);
-      p.putString("name", txt);
-      p.end();
-      Profile_Save(g_profileIdx);
-    }
-    if (s_kbContainer) {
-      lv_obj_del(s_kbContainer);
-      s_kbContainer = NULL;
-      s_kbTextArea = NULL;
-      s_kbKeyboard = NULL;
-    }
-    if (s_kbGroup) {
-      lv_group_del(s_kbGroup);
-      s_kbGroup = NULL;
-    }
-    g_smDirty = true;
-  } else if (code == LV_EVENT_CANCEL) { // Fermer (X)
-    if (s_kbContainer) {
-      lv_obj_del(s_kbContainer);
-      s_kbContainer = NULL;
-      s_kbTextArea = NULL;
-      s_kbKeyboard = NULL;
-    }
-    if (s_kbGroup) {
-      lv_group_del(s_kbGroup);
-      s_kbGroup = NULL;
-    }
-    g_smDirty = true;
+static void ProfileName_Render() {
+  for (int i = 0; i < 5; i++) {
+    if (!s_pnBox[i]) continue;
+    char t[2] = { s_pnBuf[i], 0 };
+    lv_label_set_text(s_pnSlot[i], t);
+    bool sel     = (s_pnCursor == i);
+    bool editing = sel && s_pnCharEdit;
+    lv_obj_set_style_border_color(s_pnBox[i],
+      lv_color_hex(editing ? 0xfbd500 : (sel ? 0xffffff : 0x666666)), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(s_pnBox[i], sel ? 3 : 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(s_pnBox[i],
+      lv_color_hex(editing ? 0x3a3000 : 0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  }
+  if (s_pnOkBox) {
+    bool sel = (s_pnCursor == 5);
+    lv_obj_set_style_border_color(s_pnOkBox, lv_color_hex(sel ? 0xfbd500 : 0x2f8f2f), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(s_pnOkBox, sel ? 3 : 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+  }
+  if (s_pnCancelBox) {
+    bool sel = (s_pnCursor == 6);
+    lv_obj_set_style_border_color(s_pnCancelBox, lv_color_hex(sel ? 0xfbd500 : 0xc0392b), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(s_pnCancelBox, sel ? 3 : 2, LV_PART_MAIN | LV_STATE_DEFAULT);
   }
 }
 
+static void ProfileName_Close() {
+  if (s_pnContainer) { lv_obj_del(s_pnContainer); s_pnContainer = NULL; }
+  for (int i = 0; i < 5; i++) { s_pnBox[i] = NULL; s_pnSlot[i] = NULL; }
+  s_pnOkBox = NULL; s_pnCancelBox = NULL; s_pnWarn = NULL;
+  g_smDirty = true;
+}
+
+static void ProfileName_Confirm() {
+  char out[6];
+  memcpy(out, s_pnBuf, 6);
+  for (int i = 4; i >= 0; i--) { if (out[i] == ' ') out[i] = 0; else break; } // coupe les espaces de fin
+  if (strlen(out) == 0) { ProfileName_Close(); return; }  // rien de saisi -> comme Cancel
+  if (ProfileName_IsDuplicate(out)) {
+    if (s_pnWarn) { lv_label_set_text(s_pnWarn, "Name already exists"); lv_obj_clear_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN); }
+    return;  // reste dans l'editeur, rien de sauve
+  }
+  char ns[16];
+  snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
+  Preferences p;
+  p.begin(ns, false);
+  p.putString("name", out);
+  p.end();
+  Profile_Save(g_profileIdx);
+  ProfileName_Close();
+}
+
 static void Profile_ShowKeyboard(bool isNew = false) {
-  if (s_kbContainer) return;
+  if (s_pnContainer) return;
   if (isNew) {
     int found = -1;
     for (int i = 0; i < 5; i++) {
@@ -715,53 +790,108 @@ static void Profile_ShowKeyboard(bool isNew = false) {
     Profile_Load(g_profileIdx);
   }
 
-  s_kbContainer = lv_obj_create(objects.main);
-  lv_obj_set_size(s_kbContainer, 480, 480);
-  lv_obj_set_pos(s_kbContainer, 0, 0);
-  lv_obj_set_style_bg_color(s_kbContainer, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_bg_opa(s_kbContainer, LV_OPA_90, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_border_width(s_kbContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_radius(s_kbContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-
-  lv_obj_t* title = lv_label_create(s_kbContainer);
-  lv_label_set_text(title, "Profile Name (max 5 chars):");
-  lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 90);
-
-  s_kbTextArea = lv_textarea_create(s_kbContainer);
-  lv_textarea_set_one_line(s_kbTextArea, true);
-  lv_textarea_set_max_length(s_kbTextArea, 5);
-  lv_obj_set_size(s_kbTextArea, 200, 50);
-  lv_obj_set_style_text_font(s_kbTextArea, &lv_font_montserrat_28, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_align(s_kbTextArea, LV_ALIGN_TOP_MID, 0, 140);
-  
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
   Preferences p;
   p.begin(ns, true);
   String existingName = p.getString("name", "");
   p.end();
+
+  char defaultName[16];
+  const char* src;
   if (existingName.length() > 0 && !isNew) {
-    lv_textarea_set_text(s_kbTextArea, existingName.c_str());
+    src = existingName.c_str();
   } else {
-    char defaultName[16];
     snprintf(defaultName, sizeof(defaultName), "PROF%d", g_profileIdx + 1);
-    lv_textarea_set_text(s_kbTextArea, defaultName);
+    src = defaultName;
+  }
+  size_t srcLen = strlen(src);
+  for (int i = 0; i < 5; i++) s_pnBuf[i] = ((size_t)i < srcLen) ? (char)toupper((unsigned char)src[i]) : ' ';
+  s_pnBuf[5] = 0;
+  s_pnCursor   = 0;
+  s_pnCharEdit = false;
+
+  s_pnContainer = lv_obj_create(objects.main);
+  lv_obj_set_size(s_pnContainer, 480, 480);
+  lv_obj_set_pos(s_pnContainer, 0, 0);
+  lv_obj_set_style_bg_color(s_pnContainer, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_bg_opa(s_pnContainer, LV_OPA_90, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(s_pnContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_radius(s_pnContainer, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_clear_flag(s_pnContainer, LV_OBJ_FLAG_SCROLLABLE);
+
+  lv_obj_t* title = lv_label_create(s_pnContainer);
+  lv_label_set_text(title, "Profile name");
+  lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 150);
+
+  const int boxW = 50, boxH = 60, gap = 10;
+  const int totalW = 5 * boxW + 4 * gap;
+  const int startX = (480 - totalW) / 2;
+  for (int i = 0; i < 5; i++) {
+    lv_obj_t* box = lv_obj_create(s_pnContainer);
+    lv_obj_set_size(box, boxW, boxH);
+    lv_obj_set_pos(box, startX + i * (boxW + gap), 210);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_color(box, lv_color_hex(0x666666), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(box, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_radius(box, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_t* lbl = lv_label_create(box);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_34, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_center(lbl);
+    s_pnBox[i]  = box;
+    s_pnSlot[i] = lbl;
   }
 
-  s_kbKeyboard = lv_keyboard_create(s_kbContainer);
-  lv_keyboard_set_map(s_kbKeyboard, LV_KEYBOARD_MODE_TEXT_LOWER, s_kbMapLc, s_kbCtrlMap);
-  lv_keyboard_set_map(s_kbKeyboard, LV_KEYBOARD_MODE_TEXT_UPPER, s_kbMapUc, s_kbCtrlMap);
-  lv_keyboard_set_textarea(s_kbKeyboard, s_kbTextArea);
-  lv_obj_set_size(s_kbKeyboard, 380, 200);
-  lv_obj_align(s_kbKeyboard, LV_ALIGN_BOTTOM_MID, 0, -60);
-  lv_obj_add_event_cb(s_kbKeyboard, kb_event_cb, LV_EVENT_ALL, NULL);
-  
-  // Groupe de navigation par encodeur
-  s_kbGroup = lv_group_create();
-  lv_group_add_obj(s_kbGroup, s_kbKeyboard);
-  lv_group_focus_obj(s_kbKeyboard);
+  const int btnW = 90, btnGap = 20;
+  const int btnStartX = (480 - (2 * btnW + btnGap)) / 2;
+
+  s_pnOkBox = lv_obj_create(s_pnContainer);
+  lv_obj_set_size(s_pnOkBox, btnW, 50);
+  lv_obj_set_pos(s_pnOkBox, btnStartX, 300);
+  lv_obj_set_style_bg_color(s_pnOkBox, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_color(s_pnOkBox, lv_color_hex(0x2f8f2f), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(s_pnOkBox, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_radius(s_pnOkBox, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_clear_flag(s_pnOkBox, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* okLbl = lv_label_create(s_pnOkBox);
+  lv_label_set_text(okLbl, "OK");
+  lv_obj_set_style_text_color(okLbl, lv_color_hex(0x2f8f2f), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(okLbl, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_center(okLbl);
+
+  s_pnCancelBox = lv_obj_create(s_pnContainer);
+  lv_obj_set_size(s_pnCancelBox, btnW, 50);
+  lv_obj_set_pos(s_pnCancelBox, btnStartX + btnW + btnGap, 300);
+  lv_obj_set_style_bg_color(s_pnCancelBox, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_color(s_pnCancelBox, lv_color_hex(0xc0392b), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(s_pnCancelBox, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_radius(s_pnCancelBox, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_clear_flag(s_pnCancelBox, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_t* cancelLbl = lv_label_create(s_pnCancelBox);
+  lv_label_set_text(cancelLbl, "Cancel");
+  lv_obj_set_style_text_color(cancelLbl, lv_color_hex(0xc0392b), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(cancelLbl, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_center(cancelLbl);
+
+  s_pnWarn = lv_label_create(s_pnContainer);
+  lv_label_set_text(s_pnWarn, "Name already exists");
+  lv_obj_set_style_text_color(s_pnWarn, lv_color_hex(0xff4040), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(s_pnWarn, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align(s_pnWarn, LV_ALIGN_TOP_MID, 0, 360);
+  lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
+
+  lv_obj_t* hint = lv_label_create(s_pnContainer);
+  lv_label_set_text(hint, "Rotate: move / Press: select - letter\nLong press: cancel");
+  lv_obj_set_style_text_color(hint, lv_color_hex(0x999999), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(hint, &lv_font_montserrat_16, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align(hint, LV_ALIGN_TOP_MID, 0, 395);
+
+  ProfileName_Render();
 }
 
 static void SmAdjust(uint8_t s, long d) {
@@ -799,8 +929,7 @@ static void SmAdjust(uint8_t s, long d) {
     case SET_GLIDER_V3:       g_gliderV3 += (int)d; if (g_gliderV3 < 40) g_gliderV3 = 40; if (g_gliderV3 > 300) g_gliderV3 = 300; break;
     case SET_GLIDER_SI3:      g_gliderSi3 += (float)d * 0.01f; break;
     case SET_PROFILE_SELECT:
-      g_profileIdx = (g_profileIdx + (int)d + 5) % 5;
-      Profile_Load(g_profileIdx);
+      Profile_SelectNext((int)d);
       break;
   }
 }
@@ -908,11 +1037,10 @@ static void SetupMenu_Open()  { g_setupOpen = true; g_menuState = MENU_CLOSED; g
 static void SetupMenu_Close() {
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); }
   if (g_ibEditState != IBEDIT_NONE) { InfoBox_CloseEdit(); }
-  // Clavier de saisie (New/Save profil) : sans ca, un appui long pendant la saisie
-  // fermait tout le setup en laissant le clavier affiche et inaccessible pour toujours
+  // Editeur de nom de profil (New/Save/Edit) : sans ca, un appui long pendant la saisie
+  // fermait tout le setup en laissant l'editeur affiche et inaccessible pour toujours
   // (2 juillet 2026 - plus aucun code ne pouvait le supprimer une fois g_setupOpen=false).
-  if (s_kbContainer) { lv_obj_del(s_kbContainer); s_kbContainer = NULL; s_kbTextArea = NULL; s_kbKeyboard = NULL; }
-  if (s_kbGroup)     { lv_group_del(s_kbGroup);   s_kbGroup     = NULL; }
+  if (s_pnContainer) ProfileName_Close();  // annule sans sauver (comme avant avec le clavier)
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
 static void SetupMenu_Back()  {
@@ -968,10 +1096,20 @@ static void Confirm_Hide() {
   g_smDirty = true;
 }
 static void SetupMenu_Rotate(long d) {
-  if (s_kbContainer && s_kbGroup) {
-    for (int i = 0; i < abs(d); i++) {
-      lv_group_send_data(s_kbGroup, (d > 0) ? LV_KEY_RIGHT : LV_KEY_LEFT);
+  if (s_pnContainer) {
+    if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
+    if (s_pnCharEdit) {
+      int idx = -1;
+      for (int k = 0; k < PN_CHARSET_LEN; k++) if (PN_CHARSET[k] == s_pnBuf[s_pnCursor]) { idx = k; break; }
+      idx = ((idx + (int)d) % PN_CHARSET_LEN + PN_CHARSET_LEN) % PN_CHARSET_LEN;
+      s_pnBuf[s_pnCursor] = PN_CHARSET[idx];
+    } else {
+      int i = (int)s_pnCursor + (int)d;
+      if (i < 0) i = 0;
+      if (i > 6) i = 6;
+      s_pnCursor = (int8_t)i;
     }
+    ProfileName_Render();
     return;
   }
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
@@ -999,8 +1137,12 @@ static void SetupMenu_Rotate(long d) {
   g_smDirty = true;
 }
 static void SetupMenu_Press() {
-  if (s_kbContainer && s_kbGroup) {
-    lv_group_send_data(s_kbGroup, LV_KEY_ENTER);
+  if (s_pnContainer) {
+    if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
+    if (s_pnCursor == 5) { ProfileName_Confirm(); return; }
+    if (s_pnCursor == 6) { ProfileName_Close(); return; }
+    s_pnCharEdit = !s_pnCharEdit;
+    ProfileName_Render();
     return;
   }
   if (g_smConfirm != -1) {
@@ -1101,7 +1243,7 @@ static void SetupMenu_Press() {
     case ST_VALUE:
     case ST_CHOICE: g_smEdit = true; break;
     case ST_INFO:
-      if (it->arg == SET_PROFILE_SAVE || it->arg == SET_PROFILE_NEW) {
+      if (it->arg == SET_PROFILE_SAVE || it->arg == SET_PROFILE_NEW || it->arg == SET_PROFILE_EDIT) {
         Profile_ShowKeyboard(it->arg == SET_PROFILE_NEW);
         return;
       }
@@ -1218,10 +1360,11 @@ static void SetupMenu_Init()
 
   // --- Sous-menu Profile (profil_list EEZ) ---
   s_prName[0] = objects.prname0; s_prVal[0] = objects.prval0;  // "Profil" + nom actuel
-  s_prName[1] = objects.prname1; s_prVal[1] = NULL;            // "New"
-  s_prName[2] = objects.prname2; s_prVal[2] = NULL;            // "Save"
-  s_prName[3] = objects.prname4; s_prVal[3] = NULL;            // "Delete"
-  s_prName[4] = objects.prname5; s_prVal[4] = NULL;            // "Back"
+  s_prName[1] = objects.prname1; s_prVal[1] = NULL;            // "Edit"
+  s_prName[2] = objects.prname2; s_prVal[2] = NULL;            // "New"
+  s_prName[3] = objects.prname3; s_prVal[3] = NULL;            // "Save"
+  s_prName[4] = objects.prname4; s_prVal[4] = NULL;            // "Delete"
+  s_prName[5] = objects.prname5; s_prVal[5] = NULL;            // "Back"
   lv_obj_set_scrollbar_mode(objects.profil_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_HIDDEN);
@@ -1524,14 +1667,13 @@ static void SetupMenu_Apply()
     return;
   }
   if (g_smMenu == SM_PROFILE) {
-    // Met a jour le nom du profil actif dans prval0
-    char ns[16]; snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
-    Preferences pp; pp.begin(ns, true);
-    String n = pp.getString("name", ""); pp.end();
-    if (n.length() == 0) { snprintf(g_profileName, sizeof(g_profileName), "P%d", g_profileIdx+1); }
-    else { strncpy(g_profileName, n.c_str(), sizeof(g_profileName)-1); g_profileName[sizeof(g_profileName)-1] = 0; }
+    // SetupMenu_RenderList() ecrit un texte generique "Profile N" sur vals[0] (ST_CHOICE
+    // -> SmValTxt(SET_PROFILE_SELECT)) : le nom personnalise DOIT etre applique APRES,
+    // sinon il est aussitot ecrase (observe : Edit/Save/Delete semblaient sans effet).
+    SetupMenu_RenderList(objects.profil_list, s_prName, s_prVal, m);
+    Profile_RefreshName();
     lv_label_set_text(objects.prval0, g_profileName);
-    SetupMenu_RenderList(objects.profil_list, s_prName, s_prVal, m); return;
+    return;
   }
   SetupMenu_HideLists();   // autres menus (windowing) : conteneurs caches
   lv_obj_add_flag(objects.item5, LV_OBJ_FLAG_HIDDEN);
@@ -1599,7 +1741,10 @@ static void menu_onButton()
       if (g_menuIndex == MENU_EXIT) g_menuState = MENU_CLOSED;
       else                          g_menuState = MENU_EDIT;
       break;
-    case MENU_EDIT: g_menuState = MENU_NAV; break;
+    case MENU_EDIT:
+      if (g_menuIndex == 5) Config_Save();  // persiste le profil actif (1x en sortant d'edition)
+      g_menuState = MENU_NAV;
+      break;
   }
   g_menuDirty = true;
 }
@@ -1639,6 +1784,11 @@ static void menu_onRotate(long delta)
         else if (delta < 0) g_sinkSound = false;
         // Envoyer immediatement la commande vers le Calculateur
         Cmd_SendState();
+        break;
+      case 5:  // Profil : bascule vers un autre profil enregistre (glider + info boxes)
+                // Config_Save() differe a la sortie d'edition (menu_onButton), pas ici :
+                // sinon ecriture NVS complete a chaque cran d'encodeur -> bloque LVGL.
+        Profile_SelectNext((int)delta);
         break;
     }
     g_menuDirty = true;
@@ -1903,6 +2053,8 @@ static void Menu_Apply()
   snprintf(buf, sizeof(buf), "%d %%", g_bugs);   lv_label_set_text(objects.val_bugs,   buf);
   snprintf(buf, sizeof(buf), "%d kg", g_weight); lv_label_set_text(objects.val_weight, buf);
   lv_label_set_text(objects.obj6, g_sinkSound ? "Full" : "Mute"); // val_sound
+  Profile_RefreshName();
+  lv_label_set_text(objects.val_profil, g_profileName);
 
   lv_obj_clear_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 
@@ -1922,6 +2074,12 @@ static void Menu_Apply()
 //  V = vitesse sol GPS (recue par WiFi). Sans fix -> passthrough.
 static void Comp_Apply()
 {
+  // Mode Condor : g_vario recu du calculateur est deja le evario Condor (deja compense TE
+  // cote sim). Fusionner en plus l'IMU/baro physique du banc (immobile, sans rapport avec
+  // le vol simule) ne fait qu'ajouter du bruit -> aiguille toujours plus grande que Condor.
+  // Bypass complet de la fusion dans ce mode (cf commentaire "effet a cabler" sur g_condorSim).
+  if (g_condorSim) { g_varioComp = isnan(g_vario) ? 0.0f : g_vario; return; }
+
   static uint32_t lastUs = 0;
   static float    vF = 0.0f, vPrev = 0.0f;
   float base = isnan(g_varioFused) ? 0.0f : g_varioFused;
@@ -2001,6 +2159,113 @@ static void Circling_Apply()
   }
 }
 
+// Estimation du vent par derive GPS en spirale (Lot E). Principe : en spirale coordonnee
+// a vitesse air a peu pres constante, le vecteur vitesse-air balaie les 360 degres de
+// facon a peu pres uniforme sur un tour complet -> sa moyenne vectorielle tend vers zero.
+// Donc moyenne(vitesse SOL) sur un tour complet = vecteur vent (vitesse sol = vitesse air
+// + vent). Echantillonnage 1 Hz (aligne sur Circling_Apply), accumulation vectorielle
+// ponderee par dt, remise a zero a chaque nouveau tour complet (rotation cumulee 360°).
+// Hors spirale : accumulateur remis a zero, derniere estimation conservee pour affichage.
+static float g_windSpeedKmh = NAN;  // vitesse du vent estimee (km/h)
+static float g_windDirDeg   = NAN;  // direction D'OU vient le vent (deg, convention meteo)
+static void Wind_Apply()
+{
+  static uint32_t lastMs    = 0;
+  static float    prevTrack = NAN;
+  static float    sumEast = 0.0f, sumNorth = 0.0f, sumDt = 0.0f, rotAccum = 0.0f;
+
+  uint32_t now  = millis();
+  uint32_t dtMs = now - lastMs;
+  if (dtMs < 1000) return;               // echantillonnage 1 Hz
+  float dt = dtMs / 1000.0f;
+  lastMs = now;
+
+  if (!g_circling || !g_gpsOk || isnan(g_gpsTrack) || isnan(g_gndSpeed)) {
+    prevTrack = NAN; sumEast = sumNorth = sumDt = rotAccum = 0.0f;
+    return;
+  }
+  if (isnan(prevTrack)) { prevTrack = g_gpsTrack; return; }
+
+  float d = g_gpsTrack - prevTrack;      // delta de cap, normalise [-180,180]
+  while (d > 180.0f)  d -= 360.0f;
+  while (d < -180.0f) d += 360.0f;
+  prevTrack = g_gpsTrack;
+  rotAccum += fabsf(d);
+
+  float rad = g_gpsTrack * (PI / 180.0f);
+  sumEast  += g_gndSpeed * sinf(rad) * dt;
+  sumNorth += g_gndSpeed * cosf(rad) * dt;
+  sumDt    += dt;
+
+  if (rotAccum >= 360.0f && sumDt > 0.0f) {   // tour complet accumule -> nouvelle estimation
+    float windEast  = sumEast  / sumDt;       // vecteur "vent VERS" (ou il souffle)
+    float windNorth = sumNorth / sumDt;
+    float newSpeed = sqrtf(windEast * windEast + windNorth * windNorth);
+    float newDir   = atan2f(-windEast, -windNorth) * (180.0f / PI);  // "vent DE" = oppose
+    if (newDir < 0.0f) newDir += 360.0f;
+
+    if (isnan(g_windSpeedKmh)) { g_windSpeedKmh = newSpeed; g_windDirDeg = newDir; }
+    else {
+      g_windSpeedKmh += (newSpeed - g_windSpeedKmh) * 0.4f;   // lissage entre tours successifs
+      float dd = newDir - g_windDirDeg;
+      while (dd > 180.0f)  dd -= 360.0f;
+      while (dd < -180.0f) dd += 360.0f;
+      g_windDirDeg += dd * 0.4f;
+      if (g_windDirDeg < 0.0f)   g_windDirDeg += 360.0f;
+      if (g_windDirDeg >= 360.0f) g_windDirDeg -= 360.0f;
+    }
+    sumEast = sumNorth = sumDt = rotAccum = 0.0f;   // reset pour le tour suivant
+  }
+}
+
+// Affiche direction/vitesse du vent (2 labels EEZ) uniquement en vol droit avec un fix
+// GPS et une estimation dispo -- symetrique du Thermal Helper (visible seulement en
+// spirale). Le planeur fixe + la fleche animee (images EEZ a venir) suivront le meme
+// gating une fois construits.
+static void WindDisplay_Update()
+{
+  bool show = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling
+              && g_gpsOk && !isnan(g_windSpeedKmh);
+  if (objects.lbl_wind_dir) {
+    if (show) {
+      char b[8];
+      snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      lv_label_set_text(objects.lbl_wind_dir, b);
+      lv_obj_clear_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (objects.lbl_wind_value_speed) {
+    if (show) {
+      float spd = g_uSpeed ? g_windSpeedKmh * 0.539957f : g_windSpeedKmh;
+      char b[8];
+      snprintf(b, sizeof(b), "%.0f", spd);
+      lv_label_set_text(objects.lbl_wind_value_speed, b);
+      lv_obj_clear_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (objects.img_wind_arrow) {
+    if (show) {
+      // Planeur (symbole a venir) toujours "nez en haut" -> la fleche tourne en relatif
+      // par rapport a la route GPS (meme convention que le Thermal Helper), pas au nord.
+      float rel = g_windDirDeg - g_gpsTrack;
+      while (rel <   0.0f) rel += 360.0f;
+      while (rel >= 360.0f) rel -= 360.0f;
+      lv_img_set_angle(objects.img_wind_arrow, (int16_t)(rel * 10.0f));  // 0.1 deg / unite LVGL
+      lv_obj_clear_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (objects.img_glider_wind) {
+    if (show) lv_obj_clear_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
+    else      lv_obj_add_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
 // Avg climb : moyenne glissante du vario compense sur 15/20/30 s (echantillon 1 Hz, recalcul
 // ecran). Remplace la valeur vario_int recue du calculateur pour refleter le reglage Avg climb.
 static void AvgClimb_Apply()
@@ -2027,6 +2292,15 @@ static void FlightTime_Apply()
 {
   static uint32_t aboveSince = 0, belowSince = 0;
   uint32_t now = millis();
+  if (g_condorSim) {
+    // En mode Condor, le calculateur force airspeed/gnd_speed a une constante (30) pour
+    // eviter une double compensation TE cote ecran -> inutilisable pour detecter un
+    // "decollage" ici (toujours < seuil 40). On utilise a la place l'etat des donnees
+    // Condor recues (g_gpsOk, actif tant qu'un paquet Condor arrive) comme signal de vol.
+    if (!g_inFlight && g_gpsOk)       { g_inFlight = true;  g_takeoffMs = now; }
+    else if (g_inFlight && !g_gpsOk)  { g_inFlight = false; }
+    return;
+  }
   float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // air si pitot, sinon vitesse sol GPS
   if (!g_inFlight) {
     if (spd > 40.0f) { if (aboveSince == 0) aboveSince = now;
@@ -2048,6 +2322,63 @@ static void ClimbGain_Apply()
   if (g_circling && !prevCirc) { entryAlt = g_altitude; g_climbGain = 0.0f; }
   if (g_circling) g_climbGain = g_altitude - entryAlt;
   prevCirc = g_circling;
+}
+
+// Ajuste une parabole sink(V) = a*V^2 + b*V + c sur les 3 points de la polaire du
+// planeur (V1/Si1, V2/Si2, V3/Si3 : vitesse km/h -> taux de chute m/s, toujours negatif).
+// Interpolation de Lagrange developpee -> coefficients directs (pas de resolution
+// matricielle). V1/V2/V3 sont supposees distinctes (issues de la base planeurs ou du
+// menu Glider infos) ; en cas de collision (valeurs egales editees a la main), on
+// retombe sur une polaire plate au 1er point plutot que de propager une division par 0.
+static void Polar_Fit(float* a, float* b, float* c)
+{
+  float v1 = g_gliderV1, v2 = g_gliderV2, v3 = g_gliderV3;
+  float s1 = g_gliderSi1, s2 = g_gliderSi2, s3 = g_gliderSi3;
+  float d1 = (v1 - v2) * (v1 - v3);
+  float d2 = (v2 - v1) * (v2 - v3);
+  float d3 = (v3 - v1) * (v3 - v2);
+  if (fabsf(d1) < 1e-3f || fabsf(d2) < 1e-3f || fabsf(d3) < 1e-3f) {
+    *a = 0.0f; *b = 0.0f; *c = s1;   // polaire degeneree -> sink constant de secours
+    return;
+  }
+  float a1 = 1.0f / d1, b1 = -(v2 + v3) / d1, c1 = (v2 * v3) / d1;
+  float a2 = 1.0f / d2, b2 = -(v1 + v3) / d2, c2 = (v1 * v3) / d2;
+  float a3 = 1.0f / d3, b3 = -(v1 + v2) / d3, c3 = (v1 * v2) / d3;
+  *a = s1 * a1 + s2 * a2 + s3 * a3;
+  *b = s1 * b1 + s2 * b2 + s3 * b3;
+  *c = s1 * c1 + s2 * c2 + s3 * c3;
+}
+
+// Taux de chute du planeur (m/s, negatif) a la vitesse donnee (km/h), d'apres la polaire.
+static float Polar_Sink(float v_kmh)
+{
+  float a, b, c;
+  Polar_Fit(&a, &b, &c);
+  return a * v_kmh * v_kmh + b * v_kmh + c;
+}
+
+// Vario netto : vario TE mesure moins le taux de chute propre du planeur a la vitesse
+// actuelle -> estimation du mouvement vertical de la masse d'air, independant du pilotage.
+// Necessite une vraie vitesse air (MS4525) ; sans pitot -> NAN (affiche "---").
+static float g_varioNetto = NAN;
+static void Netto_Apply()
+{
+  g_varioNetto = (g_airspeed > 5.0f) ? (g_varioComp - Polar_Sink(g_airspeed)) : NAN;
+}
+
+// Vitesse optimale de croisiere (MacCready) : tangente a la polaire depuis (0,-MC),
+// theorie MacCready classique. Pour sink(V)=aV^2+bV+c, le point de tangence verifie
+// a*V^2 = c + MC (developpement de sink'(V) = (sink(V)+MC)/V). Pas de compensation
+// vent pour l'instant (etape ulterieure, cf estimation vent en spirale).
+static float g_stfSpeed = NAN;
+static void STF_Apply()
+{
+  float a, b, c;
+  Polar_Fit(&a, &b, &c);
+  float mc = g_mcTenths / 10.0f;
+  if (fabsf(a) < 1e-6f) { g_stfSpeed = NAN; return; }
+  float v2 = (c + mc) / a;
+  g_stfSpeed = (v2 > 0.0f) ? sqrtf(v2) : NAN;
 }
 
 #if SIM_THERMAL
@@ -2304,7 +2635,9 @@ static void Labels_Apply()
         break;
       }
       case IB_WIND: {
-        snprintf(buf, sizeof(buf), "NW 25");   // TODO Lot E : vent estime (derive GPS en spirale)
+        if (isnan(g_windSpeedKmh)) { snprintf(buf, sizeof(buf), "Wind ---"); break; }
+        float spd = g_uSpeed ? g_windSpeedKmh * 0.539957f : g_windSpeedKmh;
+        snprintf(buf, sizeof(buf), "%03.0f %.0f", g_windDirDeg, spd);
         break;
       }
       case IB_CLIMB_GAIN: {
@@ -2326,6 +2659,18 @@ static void Labels_Apply()
         } else {
           snprintf(buf, sizeof(buf), "L/D ---");
         }
+        break;
+      }
+      case IB_NETTO: {
+        if (isnan(g_varioNetto)) { snprintf(buf, sizeof(buf), "--- %s", g_uVert ? "kt" : "m/s"); break; }
+        float v = g_uVert ? g_varioNetto * 1.94384f : g_varioNetto;
+        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", v);
+        break;
+      }
+      case IB_STF: {
+        if (isnan(g_stfSpeed)) { snprintf(buf, sizeof(buf), "STF ---"); break; }
+        float s = g_uSpeed ? g_stfSpeed * 0.539957f : g_stfSpeed;
+        snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
       default:
@@ -2506,14 +2851,24 @@ void loop()
   if (!s_soundCfgSent && millis() > 2000) { SoundCfg_Send(); s_soundCfgSent = true; }
   Comp_Apply();     // compensation TE GPS (vitesse recue du calculateur) -> g_varioComp
   Circling_Apply(); // detection spirale / vol droit -> g_circling + g_turnDir
+  Wind_Apply();      // estimation vent (derive GPS en spirale) -> g_windSpeedKmh/g_windDirDeg
+  // Bascule auto des info-boxes affichees entre le profil Climb et Cruise, sauf pendant
+  // l'edition de l'un des deux profils dans le menu (g_infoBoxConfig pointe alors
+  // volontairement sur celui choisi -> ne pas l'ecraser depuis ici).
+  if (g_ibEditState == IBEDIT_NONE) {
+    g_infoBoxConfig = g_circling ? g_ibConfigClimb : g_ibConfigCruise;
+  }
   AvgClimb_Apply();  // moyenne glissante du vario (Avg climb) -> g_varioAvg
   FlightTime_Apply();// detection decollage / atterrissage -> g_takeoffMs / g_inFlight
   ClimbGain_Apply(); // gain d'altitude du thermique courant -> g_climbGain
+  Netto_Apply();     // vario compense de la polaire -> g_varioNetto
+  STF_Apply();       // vitesse optimale MacCready (polaire) -> g_stfSpeed
 #if SIM_THERMAL
   Sim_Thermal_Step();   // banc : injecte un faux thermique (SIM_THERMAL=1)
 #else
   ThermalHelper_Update(g_gpsTrack, g_varioComp, g_circling, g_turnDir, millis());
   ThermalDraw_Update((g_menuState == MENU_CLOSED) && !g_setupOpen && g_circling && g_helperEnable, g_turnDir, g_gpsTrack);
+  WindDisplay_Update();
 #endif
   if (!g_setupOpen) {            // quand le setup est ouvert : on ne dessine plus le vario derriere
     Needles_Apply();
@@ -2562,6 +2917,10 @@ void loop()
                   g_airspeed, g_gpsOk ? 1 : 0, g_gpsTrack,
                   g_circling ? "SPIRALE" : "DROIT",
                   g_altitude, g_volume);
+    Serial.printf("[polar] netto=%+.2f stf=%.0fkm/h (mc=%.1f, airspeed=%.0f)\n",
+                  g_varioNetto, g_stfSpeed, g_mcTenths / 10.0f, g_airspeed);
+    Serial.printf("[wind] speed=%.1fkm/h dir=%.0f (circling=%d, trk=%.0f, gnd=%.1f)\n",
+                  g_windSpeedKmh, g_windDirDeg, g_circling ? 1 : 0, g_gpsTrack, g_gndSpeed);
 
     // --- Dump thermal helper (validation etape 1) ---
     if (g_circling) {

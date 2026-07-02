@@ -16,6 +16,11 @@
 // NORMAL MODE: "LIM-Vario" Access Point for GPS (NMEA/UDP from mobile phone) + baro sensor.
 // USB BRIDGE (Condor) remains AUTO-DETECTED: if "key=value" lines arrive on serial port
 // (bench testing bridge), they are ingested automatically; otherwise ignored in real flight.
+// NOTE (3 juillet 2026) : le mode STA (rejoindre la box maison) a ete essaye pour le bench
+// test Condor -> abandonne, ESP32 en reception UDP pure perd les paquets par intermittence
+// meme avec setSleep(false)/reconnexion (RSSI correct mais paquets non fiables). La seule
+// solution qui marche pour Condor = pont USB serie (voir condor_bridge.py), qui passe par
+// le chemin "USB BRIDGE" ci-dessus, independant du WiFi.
 
 static WiFiUDP   udp;
 static bool      g_up     = false;
@@ -76,11 +81,18 @@ static void parseCondor(char* s)
   if (!eq) return;
   *eq = 0;
   float v = (float)atof(eq + 1);
+  bool known = true;
   if      (!strcmp(s, "evario"))   g_cVario = v;          // compensated TE vario (m/s)
   else if (!strcmp(s, "altitude")) g_cAlt   = v;          // altitude (m)
   else if (!strcmp(s, "compass"))  g_track  = v;          // heading (deg) -> circle/glider symbol
   else if (!strcmp(s, "airspeed")) g_speed  = v;          // true airspeed (m/s)
-  else if (!strcmp(s, "time")) {                          // present inside EVERY packet
+  else if (!strcmp(s, "time"))     { /* timestamp field, no state to update */ }
+  else known = false;
+  // 3 juillet 2026 : la marque "connexion active" reposait uniquement sur le champ "time=",
+  // absent (ou nomme differemment) dans les trames Condor reellement recues en test -> CONDOR
+  // restait bloque a 0 en permanence alors que evario/altitude/compass/airspeed arrivaient bien.
+  // On considere donc la liaison active des qu'un champ Condor RECONNU (quel qu'il soit) arrive.
+  if (known) {
     g_condorMs = millis();
     g_lastMs   = millis();
     g_fix      = true;                                    // Sim fix valid -> HasFix() true

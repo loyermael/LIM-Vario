@@ -28,6 +28,10 @@ typedef struct _objects_t {
     lv_obj_t *lbl_ib_bas_sup;
     lv_obj_t *lbl_ib_bas_inf;
     lv_obj_t *img_gps;
+    lv_obj_t *img_wind_arrow;
+    lv_obj_t *img_glider_wind;
+    lv_obj_t *lbl_wind_value_speed;
+    lv_obj_t *lbl_wind_dir;
     lv_obj_t *quick_menu_panel;
     lv_obj_t *item_list;
     lv_obj_t *_lbl_exit;
@@ -138,6 +142,7 @@ typedef struct _objects_t {
     lv_obj_t *prval0;
     lv_obj_t *prname1;
     lv_obj_t *prname2;
+    lv_obj_t *prname3;
     lv_obj_t *prname4;
     lv_obj_t *prname5;
     lv_obj_t *center_info_list;

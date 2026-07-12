@@ -147,3 +147,12 @@ void Lvgl_Loop(void)
   g_perfHandlerCnt = g_perfHandlerCnt + 1;
   // vTaskDelay(pdMS_TO_TICKS(5));
 }
+
+// Force LVGL a redessiner TOUT l'ecran au prochain lv_timer_handler.
+// En mode partiel, seules les zones qui changent sont redessinees ; apres une
+// corruption du framebuffer (ex : arret du WiFi qui coupe le cache PSRAM), les
+// zones statiques restent abimees tant qu'on ne les invalide pas explicitement.
+void Lvgl_ForceFullRedraw(void)
+{
+  lv_obj_invalidate(lv_scr_act());
+}

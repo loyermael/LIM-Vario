@@ -32,6 +32,10 @@ typedef struct _objects_t {
     lv_obj_t *img_glider_wind;
     lv_obj_t *lbl_wind_value_speed;
     lv_obj_t *lbl_wind_dir;
+    lv_obj_t *qr_panel;
+    lv_obj_t *lbl_qr_hint;
+    lv_obj_t *lbl_qr_title;
+    lv_obj_t *qr_slot;
     lv_obj_t *quick_menu_panel;
     lv_obj_t *item_list;
     lv_obj_t *_lbl_exit;

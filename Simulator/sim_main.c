@@ -24,6 +24,7 @@
 #include "lvgl.h"
 #include "screens.h"
 #include "images.h"
+#include "sim_server.h"
 
 #define SCR_W 480
 #define SCR_H 480
@@ -148,10 +149,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             lv_tick_inc(dt);
             SimMenu_Tick(now / 1000.0);
             lv_timer_handler();
+            SimServer_Tick();
             InvalidateRect(hwnd, NULL, FALSE);
             return 0;
         }
         case WM_DESTROY:
+            SimServer_Shutdown();
             PostQuitMessage(0);
             return 0;
     }
@@ -199,6 +202,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdline, int show)
     lv_disp_load_scr(objects.main);   /* on saute le splash : vue vol directe */
     apply_hardware_fixes();
     SimMenu_Init();                   /* hide des panneaux setup/quick menu/editeur inclus */
+    SimServer_Init(8080);             /* app companion testable sur http://127.0.0.1:8080 */
 
     SetTimer(s_hwnd, 1, 16, NULL);    /* ~60 Hz : tick LVGL + demo + repaint */
 

@@ -27,7 +27,7 @@ $UiImageSources = Get-ChildItem "$UiDir\ui_image_*.c" | Select-Object -ExpandPro
 $UiSources = @(
     "$UiDir\screens.c", "$UiDir\styles.c", "$UiDir\images.c", "$UiDir\vars.c"
 ) + $UiImageSources
-$SimSources = @("$PSScriptRoot\eez_flow_stubs.c", "$PSScriptRoot\sim_menu.c", "$PSScriptRoot\sim_main.c")
+$SimSources = @("$PSScriptRoot\eez_flow_stubs.c", "$PSScriptRoot\sim_menu.c", "$PSScriptRoot\sim_server.c", "$PSScriptRoot\sim_main.c")
 
 $AllSources = $LvglSources + $UiSources + $SimSources
 Write-Output "Compilation de $($AllSources.Count) fichiers .c..."
@@ -46,7 +46,7 @@ $Lines = @(
     "-I`"$(ToFwdSlash $FirmwareDir)/src`""
 ) + ($AllSources | ForEach-Object { "`"$(ToFwdSlash $_)`"" }) + @(
     "-o", "`"$(ToFwdSlash $OutExe)`"",
-    "-lgdi32", "-luser32", "-lkernel32", "-lm", "-mwindows"
+    "-lgdi32", "-luser32", "-lkernel32", "-lm", "-lws2_32", "-mwindows"
 )
 Set-Content -Path $RspFile -Value $Lines -Encoding ASCII
 

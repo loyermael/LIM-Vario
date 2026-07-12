@@ -172,6 +172,7 @@ static void Cmd_Poll() {
           bool sinkOn = (c->cmd & LIM_CMD_SINK_SOUND) != 0;
           varioSound.setSinkAlarm(sinkOn);
           g_condorEnabled = (c->cmd & LIM_CMD_CONDOR) != 0;
+          GpsLink_SetCondorEnabled(g_condorEnabled);
           Serial.printf("[cmd] SinkSound=%s Condor=%s\n", sinkOn ? "Full" : "Mute", g_condorEnabled ? "ON" : "OFF");
         }
       } else {                                        // ---- Audio Settings (pitch/wave/spread) ----
@@ -207,7 +208,13 @@ void loop() {
 
   // --- BMP388 Barometric Readings ---
   bool  gotBaro = false;
-  float p_pa = P0_PA, tempC = 15.0f, alt = 0.0f;
+  // Sur ECHEC de lecture BMP388 (hoquet I2C), NE PAS retomber sur P0_PA (101325 Pa = niveau
+  // mer) : cette valeur par defaut etait transmise telle quelle a l'ecran (pkt.pressure),
+  // qui la lisait comme une CHUTE D'ALTITUDE de ~200 m -> explosion du vario fusionne
+  // (pics +/-100 m/s et plus observes dans les logs de vol reels, 1er vol). On tient la
+  // derniere pression valide a la place (P0_PA seulement si on n'a jamais eu de lecture).
+  float p_pa = isnan(g_lastGoodP_pa) ? P0_PA : g_lastGoodP_pa;
+  float tempC = 15.0f, alt = 0.0f;
   if (bmpOk && bmp.performReading()) {
     float p_raw = bmp.pressure;
     // Outlier rejection (2 juillet 2026) : un hoquet I2C ponctuel sur le BMP388 peut

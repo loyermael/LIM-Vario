@@ -100,11 +100,11 @@ int  g_toneSpread   = 5;
 uint8_t g_varioFilter = 1;
 uint8_t g_avgClimb    = 1;
 static bool g_updateMode = false;
-static bool g_condorSim  = false;
+bool g_condorSim  = false;
 static bool g_serverOn   = false;   /* stub FlightLog_ServerActive */
 
-static void FlightLog_ServerToggle(void) { g_serverOn = !g_serverOn; }
-static bool FlightLog_ServerActive(void) { return g_serverOn; }
+void FlightLog_ServerToggle(void) { g_serverOn = !g_serverOn; }
+bool FlightLog_ServerActive(void) { return g_serverOn; }
 
 enum InfoBoxMetric {
   IB_VARIO_INST=0, IB_VARIO_INT=1, IB_MACCREADY=2, IB_ALT_BARO=3, IB_ALT_GPS=4,
@@ -113,10 +113,10 @@ enum InfoBoxMetric {
 };
 enum CenterZoneMetric { CENTER_THERMAL_HELPER=0, CENTER_WIND_DIR=1, CENTER_EMPTY=2, CENTER_METRIC_MAX=3 };
 
-static uint8_t g_ibConfigClimb[6]  = { IB_VARIO_INST, IB_VARIO_INT, IB_EMPTY, IB_ALT_BARO, IB_CLIMB_GAIN, IB_WIND };
-static uint8_t g_ibConfigCruise[6] = { IB_VARIO_INST, IB_MACCREADY, IB_EMPTY, IB_ALT_BARO, IB_GLIDE, IB_GND_SPEED };
-static uint8_t g_centerConfigClimb = CENTER_THERMAL_HELPER;
-static uint8_t g_centerConfigCruise = CENTER_WIND_DIR;
+uint8_t g_ibConfigClimb[6]  = { IB_VARIO_INST, IB_VARIO_INT, IB_EMPTY, IB_ALT_BARO, IB_CLIMB_GAIN, IB_WIND };
+uint8_t g_ibConfigCruise[6] = { IB_VARIO_INST, IB_MACCREADY, IB_EMPTY, IB_ALT_BARO, IB_GLIDE, IB_GND_SPEED };
+uint8_t g_centerConfigClimb = CENTER_THERMAL_HELPER;
+uint8_t g_centerConfigCruise = CENTER_WIND_DIR;
 static bool    g_ibEditCruiseMode  = true;
 static uint8_t* g_infoBoxConfig    = g_ibConfigCruise;
 
@@ -159,17 +159,29 @@ static void GliderDB_LoadDefault(void) {
   }
 }
 
-static int   g_gliderIdx      = 0;
-static int   g_gliderEmptyWt  = 240;
-static int   g_gliderMaxBal   = 185;
-static int   g_gliderV1       = 80;
-static float g_gliderSi1      = -0.59f;
-static int   g_gliderV2       = 115;
-static float g_gliderSi2      = -0.76f;
-static int   g_gliderV3       = 173;
-static float g_gliderSi3      = -2.00f;
-static int   g_profileIdx     = 0;
+int   g_gliderIdx      = 0;
+int   g_gliderEmptyWt  = 240;
+int   g_gliderMaxBal   = 185;
+int   g_gliderV1       = 80;
+float g_gliderSi1      = -0.59f;
+int   g_gliderV2       = 115;
+float g_gliderSi2      = -0.76f;
+int   g_gliderV3       = 173;
+float g_gliderSi3      = -2.00f;
+int   g_profileIdx     = 0;
 static char  g_profileName[16] = "P1";
+
+/* Accesseurs pour g_gliderDb (reste static -- utilise par /api/gliders dans sim_server.c) */
+int Glider_Count(void) { return g_gliderDbCount; }
+const char* Glider_Name(int i)   { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].name : ""; }
+int   Glider_EmptyWt(int i) { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].empty_wt : 0; }
+int   Glider_MaxBal(int i)  { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].max_bal  : 0; }
+int   Glider_V1(int i)      { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].v1  : 0; }
+float Glider_Si1(int i)     { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].si1 : 0; }
+int   Glider_V2(int i)      { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].v2  : 0; }
+float Glider_Si2(int i)     { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].si2 : 0; }
+int   Glider_V3(int i)      { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].v3  : 0; }
+float Glider_Si3(int i)     { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].si3 : 0; }
 
 /* Profils : persistance en RAM seulement (pas de NVS sur PC) */
 typedef struct {
@@ -178,26 +190,41 @@ typedef struct {
 } ProfileRec;
 static ProfileRec g_profiles[5] = {0};
 
-static void Profile_Load(int idx) {
+void Profile_Load(int idx) {
   ProfileRec* p = &g_profiles[idx];
   if (!p->used) return;
   g_gliderIdx = p->gliderIdx; g_gliderEmptyWt = p->emptyWt; g_gliderMaxBal = p->maxBal;
   g_gliderV1 = p->v1; g_gliderSi1 = p->si1; g_gliderV2 = p->v2; g_gliderSi2 = p->si2;
   g_gliderV3 = p->v3; g_gliderSi3 = p->si3;
 }
-static void Profile_Save(int idx) {
+void Profile_Save(int idx) {
   ProfileRec* p = &g_profiles[idx];
-  p->used = true;
   p->gliderIdx = g_gliderIdx; p->emptyWt = g_gliderEmptyWt; p->maxBal = g_gliderMaxBal;
   p->v1 = g_gliderV1; p->si1 = g_gliderSi1; p->v2 = g_gliderV2; p->si2 = g_gliderSi2;
   p->v3 = g_gliderV3; p->si3 = g_gliderSi3;
 }
-static void Profile_Delete(int idx) {
+void Profile_Delete(int idx) {
   memset(&g_profiles[idx], 0, sizeof(ProfileRec));
   if (idx == g_profileIdx) Profile_Load(idx);
 }
 
-static bool Profile_IsUsed(int idx) { return g_profiles[idx].used && g_profiles[idx].name[0] != 0; }
+bool Profile_IsUsed(int idx) { return g_profiles[idx].used && g_profiles[idx].name[0] != 0; }
+
+/* Ecrit/lit le nom d'un profil independamment de Profile_Save (identique a main.cpp,
+ * utilise par /api/profiles dans sim_server.c). */
+void Profile_SetName(int idx, const char* name) {
+  strncpy(g_profiles[idx].name, name, sizeof(g_profiles[idx].name) - 1);
+  g_profiles[idx].name[sizeof(g_profiles[idx].name) - 1] = 0;
+  g_profiles[idx].used = (name[0] != 0);
+}
+void Profile_GetName(int idx, char* out, size_t outLen) {
+  strncpy(out, g_profiles[idx].used ? g_profiles[idx].name : "", outLen - 1);
+  out[outLen - 1] = 0;
+}
+void Profile_RefreshName(void) {
+  Profile_GetName(g_profileIdx, g_profileName, sizeof(g_profileName));
+  if (g_profileName[0] == 0) snprintf(g_profileName, sizeof(g_profileName), "Empty");
+}
 
 /* Fait defiler "Profile" en ne montrant que les profils reellement nommes (identique
  * a main.cpp, corrige 3 juillet 2026) -- masque les emplacements "Empty" en navigation
@@ -219,7 +246,7 @@ static void Profile_SelectNext(int d) {
   Profile_Load(g_profileIdx);
 }
 
-static void Config_Save(void) { /* no-op : pas de NVS sur PC, tout reste en RAM */ }
+void Config_Save(void) { /* no-op : pas de NVS sur PC, tout reste en RAM */ }
 static void Config_Load(void) { GliderDB_LoadDefault(); }
 
 /* ============================================================
@@ -378,7 +405,7 @@ static void ProfileName_Confirm(void) {
     if (s_pnWarn) { lv_label_set_text(s_pnWarn, "Name already exists"); lv_obj_clear_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN); }
     return;
   }
-  strncpy(g_profiles[g_profileIdx].name, out, sizeof(g_profiles[g_profileIdx].name) - 1);
+  Profile_SetName(g_profileIdx, out);
   strncpy(g_profileName, out, sizeof(g_profileName) - 1);
   Profile_Save(g_profileIdx);
   ProfileName_Close();
@@ -490,6 +517,8 @@ static void Profile_ShowKeyboard(bool isNew) {
   ProfileName_Render();
 }
 
+static void DbgLog(const char* msg);  /* debug temporaire, definie plus bas */
+
 static void SmToggle(uint8_t s) {
   switch (s) {
     case SET_HELPER:     g_helperEnable = !g_helperEnable; break;
@@ -497,7 +526,7 @@ static void SmToggle(uint8_t s) {
     case SET_LOGGER:     g_loggerEnable = !g_loggerEnable; break;
     case SET_UPDATE:     g_updateMode = !g_updateMode; break;
     case SET_CONDORSIM:  g_condorSim  = !g_condorSim;  break;
-    case SET_APPCONNECT: FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); break;
+    case SET_APPCONNECT: DbgLog("SmToggle SET_APPCONNECT AVANT"); FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); DbgLog("SmToggle SET_APPCONNECT APRES"); break;
   }
   Config_Save();
 }
@@ -869,6 +898,8 @@ static void SetupMenu_Init(void) {
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_HIDDEN);
 
+  if (objects.qr_panel) lv_obj_add_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
+
   if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_mode_list)        lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_list)             lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_HIDDEN);
@@ -1216,7 +1247,7 @@ static volatile bool  g_circling   = false;
 static float g_climbGain    = 0.0f;
 static uint32_t g_takeoffMs = 0;
 static bool     g_inFlight  = true;
-static float g_windSpeedKmh = NAN;   /* demo : anime seulement pour previsualiser l'affichage */
+static float g_windSpeedMs = NAN;   /* demo : anime seulement pour previsualiser l'affichage */
 static float g_windDirDeg   = NAN;
 
 static void Comp_Apply(void) {
@@ -1287,15 +1318,15 @@ static void Labels_Apply(void) {
         snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a); break; }
       case IB_ALT_GPS: { float am = g_uAlt ? g_altitude*3.28084f : g_altitude; int a=(int)(am+(am>=0?0.5f:-0.5f));
         snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a); break; }
-      case IB_AIRSPEED: { float s = g_uSpeed ? g_airspeed*0.539957f : g_airspeed; snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
-      case IB_GND_SPEED: { float gs = isfinite(g_gndSpeed)?g_gndSpeed:0.0f; float s = g_uSpeed ? gs*0.539957f : gs; snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
+      case IB_AIRSPEED: { float s = g_uSpeed ? g_airspeed*1.94384f : g_airspeed*3.6f; snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
+      case IB_GND_SPEED: { float gs = isfinite(g_gndSpeed)?g_gndSpeed:0.0f; float s = g_uSpeed ? gs*1.94384f : gs*3.6f; snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
       case IB_TIME: snprintf(buf, sizeof(buf), "%02u:%02u:%02u", (unsigned)datetime.hour, (unsigned)datetime.minute, (unsigned)datetime.second); break;
       case IB_FLIGHT_TIME: { unsigned long sec = g_takeoffMs ? (millis()-g_takeoffMs)/1000UL : 0UL; snprintf(buf, sizeof(buf), "%02lu:%02lu", sec/3600UL, (sec%3600UL)/60UL); break; }
       case IB_WIND: snprintf(buf, sizeof(buf), "NW 25"); break;
       case IB_CLIMB_GAIN: { int g=(int)(g_climbGain+(g_climbGain>=0?0.5f:-0.5f)); snprintf(buf, sizeof(buf), "%+d m", g); break; }
       case IB_FLIGHT_LVL: { int fl=(int)((g_altitude/30.48f)+0.5f); snprintf(buf, sizeof(buf), "FL %03d", fl); break; }
-      case IB_GLIDE: { float spd=(g_airspeed>5.0f)?g_airspeed:g_gndSpeed;
-        if (spd>20.0f && g_varioFused<-0.1f) { float ld=(spd/3.6f)/(-g_varioFused); if (ld>199.0f) ld=199.0f; snprintf(buf, sizeof(buf), "L/D %.0f", ld); }
+      case IB_GLIDE: { float spd=(g_airspeed>5.0f)?g_airspeed:g_gndSpeed;   /* m/s */
+        if (spd>5.5f && g_varioFused<-0.1f) { float ld=spd/(-g_varioFused); if (ld>199.0f) ld=199.0f; snprintf(buf, sizeof(buf), "L/D %.0f", ld); }
         else snprintf(buf, sizeof(buf), "L/D ---"); break; }
       default: buf[0]='\0'; break;
     }
@@ -1330,11 +1361,13 @@ static void ClimbGain_Apply(void) {
 /* Meme gating que WindDisplay_Update (main.cpp) : visible en vol droit seulement,
  * symetrique du Thermal Helper. Valeurs animees en demo (voir SimMenu_FeedDemoTelemetry). */
 static void WindDisplay_Update(void) {
-  bool show = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling
-              && g_gpsOk && !isnan(g_windSpeedKmh);
+  bool show     = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling;
+  bool haveWind = !isnan(g_windSpeedMs) && !isnan(g_windDirDeg);
   if (objects.lbl_wind_dir) {
     if (show) {
-      char b[8]; snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      char b[8];
+      if (haveWind) snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      else          snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_dir, b);
       lv_obj_clear_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -1343,7 +1376,9 @@ static void WindDisplay_Update(void) {
   }
   if (objects.lbl_wind_value_speed) {
     if (show) {
-      char b[8]; snprintf(b, sizeof(b), "%.0f", g_windSpeedKmh);
+      char b[8];
+      if (haveWind) { float spd = g_uSpeed ? g_windSpeedMs * 1.94384f : g_windSpeedMs * 3.6f; snprintf(b, sizeof(b), "%.0f", spd); }
+      else          snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_value_speed, b);
       lv_obj_clear_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -1352,9 +1387,14 @@ static void WindDisplay_Update(void) {
   }
   if (objects.img_wind_arrow) {
     if (show) {
-      float rel = g_windDirDeg - g_gpsTrack;
-      while (rel <   0.0f) rel += 360.0f;
-      while (rel >= 360.0f) rel -= 360.0f;
+      // Fleche pointe LA OU LE VENT POUSSE (aval) : g_windDirDeg = direction D'OU vient le
+      // vent -> +180 pour le sens aval. Relative au nez du planeur (route GPS).
+      float rel = 0.0f;
+      if (haveWind) {
+        rel = g_windDirDeg + 180.0f - g_gpsTrack;
+        while (rel <   0.0f) rel += 360.0f;
+        while (rel >= 360.0f) rel -= 360.0f;
+      }
       lv_img_set_angle(objects.img_wind_arrow, (int16_t)(rel * 10.0f));
       lv_obj_clear_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -1372,14 +1412,14 @@ static void SimMenu_FeedDemoTelemetry(double t) {
   g_varioFused = 2.2f * (float)sin(t * 0.6);
   g_altitude   = 850.0f + 60.0f * (float)sin(t * 0.08);
   g_airspeed   = 0.0f;                          /* pas de pitot simule -> vitesse sol utilisee */
-  g_gndSpeed   = 95.0f + 15.0f * (float)sin(t * 0.05);
+  g_gndSpeed   = 26.0f + 4.0f * (float)sin(t * 0.05);   /* m/s (~94 km/h) comme le vrai calc */
   g_gpsOk      = true;
   g_gpsTrack   = fmodf((float)(t * 8.0), 360.0f);
   g_circling   = (fmod(t, 40.0) < 15.0);
   /* Demo uniquement : le vrai calcul (derive GPS en spirale) n'existe que sur le vrai
    * firmware (main.cpp, Wind_Apply). Ici on anime juste pour previsualiser l'affichage
    * en vol droit (cache pendant la spirale, comme le vrai gating WindDisplay_Update). */
-  g_windSpeedKmh = 18.0f + 6.0f * (float)sin(t * 0.03);
+  g_windSpeedMs = 5.0f + 1.5f * (float)sin(t * 0.03);   /* m/s (~18-23 km/h) */
   g_windDirDeg   = fmodf((float)(t * 3.0), 360.0f);
   if (g_takeoffMs == 0) g_takeoffMs = millis();
 }
@@ -1387,7 +1427,54 @@ static void SimMenu_FeedDemoTelemetry(double t) {
 /* ============================================================
  *  DISPATCH ENCODEURS (equivalent menu_onButton/onLongPress/onRotate)
  * ============================================================ */
+/* ---- Ecran QR code (partage WiFi "App connect"), port fidele de main.cpp ---- */
+static lv_obj_t* s_qrCode = NULL;
+static bool      g_qrOpen = false;
+static bool      s_qrServerWasActive = false;
+
+/* DEBUG TEMPORAIRE : trace la sequence app connect / QR pour diagnostiquer le bug signale. */
+static void DbgLog(const char* msg) {
+  FILE* f = fopen("C:\\PioBuild\\LM-Vario-Sim\\qr_debug.log", "a");
+  if (f) { fprintf(f, "[%lu] %s (serverOn=%d qrOpen=%d)\n", (unsigned long)GetTickCount64(), msg, (int)FlightLog_ServerActive(), (int)g_qrOpen); fclose(f); }
+}
+
+static void QrScreen_Show(void) {
+  if (!s_qrCode && objects.qr_slot) {
+    lv_obj_clear_flag(objects.qr_slot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(objects.qr_slot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(objects.qr_slot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(objects.qr_slot, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(objects.qr_panel, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(objects.qr_panel, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    s_qrCode = lv_qrcode_create(objects.qr_slot, 220, lv_color_black(), lv_color_white());
+    lv_obj_set_pos(s_qrCode, 0, 0);
+    static const char payload[] = "WIFI:T:WPA;S:LIM-Vario;P:limvario;;";
+    lv_qrcode_update(s_qrCode, payload, strlen(payload));
+  }
+  if (objects.qr_panel) {
+    lv_obj_clear_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(objects.qr_panel);
+  }
+  g_qrOpen = true;
+  DbgLog("QrScreen_Show APRES set g_qrOpen=true");
+}
+static void QrScreen_Close(void) {
+  DbgLog("QrScreen_Close AVANT");
+  if (objects.qr_panel) lv_obj_add_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
+  g_qrOpen = false;
+  DbgLog("QrScreen_Close APRES");
+}
+static void QrScreen_Tick(void) {
+  bool active = FlightLog_ServerActive();
+  if (active && !s_qrServerWasActive) { DbgLog("QrScreen_Tick: rising edge -> Show"); QrScreen_Show(); }
+  else if (!active && g_qrOpen)       { DbgLog("QrScreen_Tick: server off -> force Close"); QrScreen_Close(); }
+  s_qrServerWasActive = active;
+}
+
 static void menu_onButton(void) {
+  DbgLog("menu_onButton ENTREE");
+  if (g_qrOpen) { QrScreen_Close(); DbgLog("menu_onButton: ferme via g_qrOpen"); return; }   /* overlay QR modal : n'importe quel clic la ferme (comme "Back") */
   g_menuDirty = true;
   if (g_setupOpen) { SetupMenu_Press(); return; }
   switch (g_menuState) {
@@ -1397,11 +1484,13 @@ static void menu_onButton(void) {
   }
 }
 static void menu_onLongPress(void) {
-  if (g_setupOpen) SetupMenu_Close();
+  if (g_qrOpen) QrScreen_Close();   /* ferme juste l'overlay QR (le WiFi reste actif) */
+  else if (g_setupOpen) SetupMenu_Close();
   else if (g_menuState != MENU_CLOSED) { g_menuState = MENU_CLOSED; g_menuDirty = true; }
   else SetupMenu_Open();
 }
 static void menu_onRotate(long delta) {
+  if (g_qrOpen) return;   /* overlay QR modal : rien a regler derriere */
   if (g_setupOpen) { SetupMenu_Rotate(delta); return; }
   if (g_menuState == MENU_CLOSED) {
     g_mcTenths += (int)delta;
@@ -1446,6 +1535,7 @@ void SimMenu_Tick(double t) {
   WindDisplay_Update();
   Menu_Apply();
   SetupMenu_Apply();
+  QrScreen_Tick();
 }
 
 /* ENC1 = rotation navigation/edition (setup + quick menu + MacCready) */
@@ -1460,4 +1550,10 @@ void SimMenu_OnRotate2(long delta) {
   g_volShownAt = millis();
 }
 /* ENC2 long = bascule serveur WiFi logs (App connect) */
-void SimMenu_OnLongPress2(void) { FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); }
+void SimMenu_OnLongPress2(void) {
+  DbgLog("OnLongPress2 ENTREE");
+  if (g_qrOpen) { QrScreen_Close(); return; }   /* overlay QR modal : ferme au lieu de re-basculer App connect */
+  FlightLog_ServerToggle();
+  g_updateMode = FlightLog_ServerActive();
+  DbgLog("OnLongPress2 toggle direct");
+}

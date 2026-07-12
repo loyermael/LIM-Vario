@@ -1,0 +1,10 @@
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}
+
+// Les artefacts de build sont ecrits HORS Nextcloud (comme PlatformIO -> C:\PioBuild).
+// Nextcloud deshydrate/synchronise les gros dossiers volatils (build/, .gradle/) et
+// casse les builds ; on garde uniquement la SOURCE dans le dossier du projet.
+allprojects {
+    layout.buildDirectory.set(new File("C:/PioBuild/LM-Vario-Android/" + project.name))
+}

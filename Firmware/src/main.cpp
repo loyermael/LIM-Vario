@@ -153,7 +153,7 @@ int  g_toneSpread   = 5;      // 0-10, intensite de variation du son selon le va
 uint8_t g_varioFilter = 1;    // 0=Fast 1=Med 2=Slow (affichage seul pour l'instant)
 uint8_t g_avgClimb    = 1;    // 0=15s 1=20s 2=30s (affichage seul pour l'instant)
 static bool g_updateMode     = false;// WiFi OTA update (effet a cabler)
-static bool g_condorSim       = false;// mode simulation Condor (bypass fusion IMU/baro dans Comp_Apply)
+bool g_condorSim       = false;// mode simulation Condor (bypass fusion IMU/baro dans Comp_Apply)
 
 enum InfoBoxMetric {
   IB_VARIO_INST  = 0,
@@ -182,10 +182,10 @@ enum CenterZoneMetric {
   CENTER_METRIC_MAX     = 3
 };
 
-static uint8_t g_ibConfigClimb[6]  = { IB_VARIO_INST, IB_VARIO_INT, IB_EMPTY, IB_ALT_BARO, IB_CLIMB_GAIN, IB_WIND };
-static uint8_t g_ibConfigCruise[6] = { IB_VARIO_INST, IB_MACCREADY, IB_EMPTY, IB_ALT_BARO, IB_GLIDE, IB_GND_SPEED };
-static uint8_t g_centerConfigClimb = CENTER_THERMAL_HELPER;
-static uint8_t g_centerConfigCruise = CENTER_WIND_DIR;
+uint8_t g_ibConfigClimb[6]  = { IB_VARIO_INST, IB_VARIO_INT, IB_EMPTY, IB_ALT_BARO, IB_CLIMB_GAIN, IB_WIND };
+uint8_t g_ibConfigCruise[6] = { IB_VARIO_INST, IB_MACCREADY, IB_EMPTY, IB_ALT_BARO, IB_GLIDE, IB_GND_SPEED };
+uint8_t g_centerConfigClimb = CENTER_THERMAL_HELPER;
+uint8_t g_centerConfigCruise = CENTER_WIND_DIR;
 static bool    g_ibEditCruiseMode  = true; // false=Climb, true=Cruise (Cruise = profil affiche par defaut)
 static uint8_t* g_infoBoxConfig    = g_ibConfigCruise; // pointeur vers profil actif
 
@@ -357,19 +357,32 @@ static void GliderDB_LoadSD() {
   }
 }
 
-static int   g_gliderIdx      = 0;
-static int   g_gliderEmptyWt  = 240;
-static int   g_gliderMaxBal   = 185;
-static int   g_gliderV1       = 80;
-static float g_gliderSi1      = -0.59f;
-static int   g_gliderV2       = 115;
-static float g_gliderSi2      = -0.76f;
-static int   g_gliderV3       = 173;
-static float g_gliderSi3      = -2.00f;
+int   g_gliderIdx      = 0;
+int   g_gliderEmptyWt  = 240;
+int   g_gliderMaxBal   = 185;
+int   g_gliderV1       = 80;
+float g_gliderSi1      = -0.59f;
+int   g_gliderV2       = 115;
+float g_gliderSi2      = -0.76f;
+int   g_gliderV3       = 173;
+float g_gliderSi3      = -2.00f;
 
-static int   g_profileIdx     = 0;
+int   g_profileIdx     = 0;
 
-static void Profile_Load(int idx) {
+// Accesseurs pour g_gliderDb (reste static : evite d'exposer GliderData/le tableau brut
+// aux autres .cpp, utilise par /api/gliders dans FlightLog.cpp).
+int Glider_Count() { return g_gliderDbCount; }
+const char* Glider_Name(int i)   { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].name : ""; }
+int   Glider_EmptyWt(int i) { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].empty_wt : 0; }
+int   Glider_MaxBal(int i)  { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].max_bal  : 0; }
+int   Glider_V1(int i)      { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].v1  : 0; }
+float Glider_Si1(int i)     { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].si1 : 0; }
+int   Glider_V2(int i)      { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].v2  : 0; }
+float Glider_Si2(int i)     { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].si2 : 0; }
+int   Glider_V3(int i)      { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].v3  : 0; }
+float Glider_Si3(int i)     { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].si3 : 0; }
+
+void Profile_Load(int idx) {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", idx);
   Preferences p;
@@ -386,7 +399,7 @@ static void Profile_Load(int idx) {
   p.end();
 }
 
-static void Profile_Save(int idx) {
+void Profile_Save(int idx) {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", idx);
   Preferences p;
@@ -403,7 +416,7 @@ static void Profile_Save(int idx) {
   p.end();
 }
 
-static void Profile_Delete(int idx) {
+void Profile_Delete(int idx) {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", idx);
   Preferences p;
@@ -422,6 +435,28 @@ static void Profile_Delete(int idx) {
   if (idx == g_profileIdx) {
     Profile_Load(idx);
   }
+}
+
+// Ecrit le nom d'un profil sans toucher a ses autres donnees (utilise par l'API companion).
+void Profile_SetName(int idx, const char* name) {
+  char ns[16];
+  snprintf(ns, sizeof(ns), "prof_%d", idx);
+  Preferences p;
+  p.begin(ns, false);
+  p.putString("name", name);
+  p.end();
+}
+
+// Lit le nom brut d'un profil (chaine vide si non utilise) -- utilise par /api/profiles.
+void Profile_GetName(int idx, char* out, size_t outLen) {
+  char ns[16];
+  snprintf(ns, sizeof(ns), "prof_%d", idx);
+  Preferences p;
+  p.begin(ns, true);
+  String n = p.getString("name", "");
+  p.end();
+  strncpy(out, n.c_str(), outLen - 1);
+  out[outLen - 1] = 0;
 }
 
 static Preferences prefs;
@@ -612,11 +647,11 @@ static lv_obj_t* s_glName[10] = {0}; // sous-menu Glider info
 static lv_obj_t* s_glVal[10]  = {0};
 static lv_obj_t* s_prName[6]  = {0}; // sous-menu Profile (panel EEZ profil_list)
 static lv_obj_t* s_prVal[6]   = {0};
-static char      g_profileName[8] = {0}; // nom du profil actif (affiche dans prval0 + quick menu)
+char             g_profileName[8] = {0}; // nom du profil actif (affiche dans prval0 + quick menu)
 
 // Rafraichit g_profileName depuis les Preferences du profil courant (g_profileIdx).
 // Utilise par le setup menu (prval0) et le quick menu (val_profil).
-static void Profile_RefreshName() {
+void Profile_RefreshName() {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
   Preferences p;
@@ -627,7 +662,7 @@ static void Profile_RefreshName() {
   else { strncpy(g_profileName, n.c_str(), sizeof(g_profileName) - 1); g_profileName[sizeof(g_profileName) - 1] = 0; }
 }
 
-static bool Profile_IsUsed(int idx) {
+bool Profile_IsUsed(int idx) {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", idx);
   Preferences p;
@@ -1369,6 +1404,9 @@ static void SetupMenu_Init()
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_HIDDEN);
 
+  // --- Ecran QR code (partage WiFi "App connect", cf QrScreen_*) ---
+  if (objects.qr_panel) lv_obj_add_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
+
   // --- Editeur Info boxes construit en EEZ ---
   if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_mode_list)        lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_HIDDEN);
@@ -1723,6 +1761,55 @@ static void SetupMenu_Apply()
 }
 
 // ============================================================
+//  ECRAN QR CODE (partage WiFi "App connect")
+// ============================================================
+static lv_obj_t* s_qrCode = NULL;
+static bool      g_qrOpen = false;
+static bool      s_qrServerWasActive = false;
+
+static void QrScreen_Show() {
+  if (!s_qrCode && objects.qr_slot) {
+    // qr_slot est un lv_obj_create() brut (EEZ) : scrollable + padding/bordure de theme par
+    // defaut -> le QR (meme taille que le slot) depassait la zone de contenu, d'ou scrollbars
+    // visibles + QR decale au lieu d'etre centre. On neutralise le style par defaut.
+    lv_obj_clear_flag(objects.qr_slot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_pad_all(objects.qr_slot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_border_width(objects.qr_slot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_opa(objects.qr_slot, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+    // qr_panel est transparent dans EEZ -> le fond du menu System restait visible en dessous.
+    lv_obj_set_style_bg_opa(objects.qr_panel, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+    lv_obj_set_style_bg_color(objects.qr_panel, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+
+    s_qrCode = lv_qrcode_create(objects.qr_slot, 220, lv_color_black(), lv_color_white());
+    lv_obj_set_pos(s_qrCode, 0, 0);
+    static const char payload[] = "WIFI:T:WPA;S:LIM-Vario;P:limvario;;";
+    lv_qrcode_update(s_qrCode, payload, strlen(payload));
+  }
+  if (objects.qr_panel) {
+    lv_obj_clear_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(objects.qr_panel);   // construit tot dans l'arbre EEZ (avant setup/quick menu)
+                                                 // -> sans ca, reste cache derriere ces panneaux si ouvert
+                                                 // pendant que le setup menu est encore affiche
+  }
+  g_qrOpen = true;
+}
+
+static void QrScreen_Close() {
+  if (objects.qr_panel) lv_obj_add_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
+  g_qrOpen = false;
+}
+
+// Ouvre automatiquement des que "App connect" (menu System) passe OFF->ON ; se referme
+// tout seul si le serveur repasse OFF (plus rien a scanner). Fermeture manuelle (appui
+// long ENC1, cf menu_onLongPress) = ferme juste l'overlay, NE COUPE PAS le WiFi.
+static void QrScreen_Tick() {
+  bool active = FlightLog_ServerActive();
+  if (active && !s_qrServerWasActive) QrScreen_Show();
+  else if (!active && g_qrOpen)       QrScreen_Close();
+  s_qrServerWasActive = active;
+}
+
+// ============================================================
 //  LOGIQUE MENU (appelee depuis la tache encodeur, pas LVGL)
 // ============================================================
 static uint32_t g_lastLongPressTime = 0;
@@ -1730,6 +1817,7 @@ static uint32_t g_lastButtonTime    = 0;
 
 static void menu_onButton()
 {
+  if (g_qrOpen) { QrScreen_Close(); return; }   // overlay QR modal : n'importe quel clic la ferme (comme "Back")
   if (millis() - g_lastLongPressTime < 600) return; // ignore rebonds/relâchement après appui long
   if (millis() - g_lastButtonTime < 250)    return; // anti-rebond entre clics courts
   g_lastButtonTime = millis();
@@ -1754,13 +1842,15 @@ static void menu_onLongPress()
   if (millis() - g_lastLongPressTime < 1000) return; // ignore maintien continu ou rebond électrique
   g_lastLongPressTime = millis();
   g_menuLastActivity = millis();
-  if (g_setupOpen)                  SetupMenu_Close();       // dans le setup : ferme tout et revient au vario
+  if (g_qrOpen)                     QrScreen_Close();       // ferme juste l'overlay QR (le WiFi reste actif)
+  else if (g_setupOpen)             SetupMenu_Close();       // dans le setup : ferme tout et revient au vario
   else if (g_menuState != MENU_CLOSED) { g_menuState = MENU_CLOSED; g_menuDirty = true; }  // ferme le quick menu
   else                              SetupMenu_Open();        // ouvre le setup
 }
 
 static void menu_onRotate(long delta)
 {
+  if (g_qrOpen) return;   // overlay QR modal : rien a regler derriere
   g_menuLastActivity = millis();
   if (g_setupOpen) { SetupMenu_Rotate(delta); return; }   // setup menu prioritaire
   if (g_menuState == MENU_CLOSED) {
@@ -1904,8 +1994,12 @@ static void Link_HandleEncoders(const lim_packet_t* p)
   }
   if (s_b2Debounced && !btn2LongFired && (now - btn2DownTime) > LONG_PRESS_MS) {
     btn2LongFired = true;
-    FlightLog_ServerToggle();      // appui long enc2 = WiFi logs ON/OFF
-    g_updateMode = FlightLog_ServerActive();  // garde le toggle "App connect" du menu coherent
+    if (g_qrOpen) {
+      QrScreen_Close();   // overlay QR modal : ferme au lieu de re-basculer App connect
+    } else {
+      FlightLog_ServerToggle();      // appui long enc2 = WiFi logs ON/OFF
+      g_updateMode = FlightLog_ServerActive();  // garde le toggle "App connect" du menu coherent
+    }
   }
   enc2BtnLast = s_b2Debounced;
 }
@@ -2166,7 +2260,7 @@ static void Circling_Apply()
 // + vent). Echantillonnage 1 Hz (aligne sur Circling_Apply), accumulation vectorielle
 // ponderee par dt, remise a zero a chaque nouveau tour complet (rotation cumulee 360°).
 // Hors spirale : accumulateur remis a zero, derniere estimation conservee pour affichage.
-static float g_windSpeedKmh = NAN;  // vitesse du vent estimee (km/h)
+static float g_windSpeedMs = NAN;  // vitesse du vent estimee (m/s -- derivee de g_gndSpeed en m/s)
 static float g_windDirDeg   = NAN;  // direction D'OU vient le vent (deg, convention meteo)
 static void Wind_Apply()
 {
@@ -2204,9 +2298,9 @@ static void Wind_Apply()
     float newDir   = atan2f(-windEast, -windNorth) * (180.0f / PI);  // "vent DE" = oppose
     if (newDir < 0.0f) newDir += 360.0f;
 
-    if (isnan(g_windSpeedKmh)) { g_windSpeedKmh = newSpeed; g_windDirDeg = newDir; }
+    if (isnan(g_windSpeedMs)) { g_windSpeedMs = newSpeed; g_windDirDeg = newDir; }
     else {
-      g_windSpeedKmh += (newSpeed - g_windSpeedKmh) * 0.4f;   // lissage entre tours successifs
+      g_windSpeedMs += (newSpeed - g_windSpeedMs) * 0.4f;   // lissage entre tours successifs
       float dd = newDir - g_windDirDeg;
       while (dd > 180.0f)  dd -= 360.0f;
       while (dd < -180.0f) dd += 360.0f;
@@ -2224,12 +2318,18 @@ static void Wind_Apply()
 // gating une fois construits.
 static void WindDisplay_Update()
 {
-  bool show = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling
-              && g_gpsOk && !isnan(g_windSpeedKmh);
+  // Meme principe que le Thermal Helper (symetrique) : affiche des que PAS en spirale,
+  // pas seulement si un fix GPS est present -- sans fix, Circling_Apply force deja
+  // g_circling=false (vol droit par defaut), donc le graphique doit s'afficher tout de
+  // suite (avec un placeholder tant que l'estimation vent n'est pas encore disponible),
+  // pas attendre un fix comme condition supplementaire.
+  bool show     = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling;
+  bool haveWind = !isnan(g_windSpeedMs) && !isnan(g_windDirDeg);
   if (objects.lbl_wind_dir) {
     if (show) {
       char b[8];
-      snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      if (haveWind) snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      else          snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_dir, b);
       lv_obj_clear_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -2238,9 +2338,11 @@ static void WindDisplay_Update()
   }
   if (objects.lbl_wind_value_speed) {
     if (show) {
-      float spd = g_uSpeed ? g_windSpeedKmh * 0.539957f : g_windSpeedKmh;
       char b[8];
-      snprintf(b, sizeof(b), "%.0f", spd);
+      if (haveWind) {
+        float spd = g_uSpeed ? g_windSpeedMs * 1.94384f : g_windSpeedMs * 3.6f;  // m/s -> kt / km/h
+        snprintf(b, sizeof(b), "%.0f", spd);
+      } else snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_value_speed, b);
       lv_obj_clear_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -2249,11 +2351,17 @@ static void WindDisplay_Update()
   }
   if (objects.img_wind_arrow) {
     if (show) {
-      // Planeur (symbole a venir) toujours "nez en haut" -> la fleche tourne en relatif
-      // par rapport a la route GPS (meme convention que le Thermal Helper), pas au nord.
-      float rel = g_windDirDeg - g_gpsTrack;
-      while (rel <   0.0f) rel += 360.0f;
-      while (rel >= 360.0f) rel -= 360.0f;
+      // Planeur toujours "nez en haut" -> la fleche tourne en relatif par rapport a la
+      // route GPS (meme convention que le Thermal Helper), pas au nord. Sans estimation
+      // encore dispo, reste pointee vers le haut (angle 0) plutot que de disparaitre.
+      // La fleche pointe LA OU LE VENT POUSSE (aval) : g_windDirDeg = direction D'OU vient
+      // le vent -> +180 pour obtenir le sens vers lequel il souffle.
+      float rel = 0.0f;
+      if (haveWind) {
+        rel = g_windDirDeg + 180.0f - g_gpsTrack;
+        while (rel <   0.0f) rel += 360.0f;
+        while (rel >= 360.0f) rel -= 360.0f;
+      }
       lv_img_set_angle(objects.img_wind_arrow, (int16_t)(rel * 10.0f));  // 0.1 deg / unite LVGL
       lv_obj_clear_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
     } else {
@@ -2288,6 +2396,10 @@ static void AvgClimb_Apply()
 
 // Temps de vol : chrono depuis le decollage. Decollage = vitesse (air ou sol selon la source
 // g_airspeed) > 40 km/h pendant 3 s ; atterrissage = < 10 km/h pendant 30 s.
+// ATTENTION UNITE : g_airspeed et g_gndSpeed arrivent du calculateur en m/s (cf GpsLink),
+// PAS en km/h -> les seuils sont exprimes en m/s (40 km/h = 11.1 m/s, 10 km/h = 2.78 m/s).
+// Bug historique : seuils laisses a 40/10 "km/h" mais compares a des m/s -> 40 m/s = 144 km/h,
+// jamais atteint en vitesse sol -> decollage jamais detecte -> chrono bloque a 00:00.
 static void FlightTime_Apply()
 {
   static uint32_t aboveSince = 0, belowSince = 0;
@@ -2295,19 +2407,19 @@ static void FlightTime_Apply()
   if (g_condorSim) {
     // En mode Condor, le calculateur force airspeed/gnd_speed a une constante (30) pour
     // eviter une double compensation TE cote ecran -> inutilisable pour detecter un
-    // "decollage" ici (toujours < seuil 40). On utilise a la place l'etat des donnees
-    // Condor recues (g_gpsOk, actif tant qu'un paquet Condor arrive) comme signal de vol.
+    // "decollage" ici. On utilise a la place l'etat des donnees Condor recues (g_gpsOk,
+    // actif tant qu'un paquet Condor arrive) comme signal de vol.
     if (!g_inFlight && g_gpsOk)       { g_inFlight = true;  g_takeoffMs = now; }
     else if (g_inFlight && !g_gpsOk)  { g_inFlight = false; }
     return;
   }
-  float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // air si pitot, sinon vitesse sol GPS
+  float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // m/s ; air si pitot, sinon sol GPS
   if (!g_inFlight) {
-    if (spd > 40.0f) { if (aboveSince == 0) aboveSince = now;
+    if (spd > 11.0f) { if (aboveSince == 0) aboveSince = now;              // 11 m/s ~ 40 km/h
                        if (now - aboveSince >= 3000) { g_inFlight = true; g_takeoffMs = aboveSince; } }
     else aboveSince = 0;
   } else {
-    if (spd < 10.0f) { if (belowSince == 0) belowSince = now;
+    if (spd < 2.8f) { if (belowSince == 0) belowSince = now;              // 2.8 m/s ~ 10 km/h
                        if (now - belowSince >= 30000) g_inFlight = false; }
     else belowSince = 0;
   }
@@ -2614,13 +2726,14 @@ static void Labels_Apply()
         break;
       }
       case IB_AIRSPEED: {
-        float s = g_uSpeed ? g_airspeed * 0.539957f : g_airspeed;
+        // g_airspeed en m/s -> km/h (x3.6) ou noeuds (x1.94384)
+        float s = g_uSpeed ? g_airspeed * 1.94384f : g_airspeed * 3.6f;
         snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
       case IB_GND_SPEED: {
-        float gs = isfinite(g_gndSpeed) ? g_gndSpeed : 0.0f;
-        float s = g_uSpeed ? gs * 0.539957f : gs;
+        float gs = isfinite(g_gndSpeed) ? g_gndSpeed : 0.0f;   // m/s
+        float s = g_uSpeed ? gs * 1.94384f : gs * 3.6f;
         snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
@@ -2635,8 +2748,8 @@ static void Labels_Apply()
         break;
       }
       case IB_WIND: {
-        if (isnan(g_windSpeedKmh)) { snprintf(buf, sizeof(buf), "Wind ---"); break; }
-        float spd = g_uSpeed ? g_windSpeedKmh * 0.539957f : g_windSpeedKmh;
+        if (isnan(g_windSpeedMs)) { snprintf(buf, sizeof(buf), "Wind ---"); break; }
+        float spd = g_uSpeed ? g_windSpeedMs * 1.94384f : g_windSpeedMs * 3.6f;  // m/s -> kt / km/h
         snprintf(buf, sizeof(buf), "%03.0f %.0f", g_windDirDeg, spd);
         break;
       }
@@ -2651,9 +2764,9 @@ static void Labels_Apply()
         break;
       }
       case IB_GLIDE: {
-        float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // air si pitot, sinon vitesse sol
-        if (spd > 20.0f && g_varioFused < -0.1f) {
-          float ld = (spd / 3.6f) / (-g_varioFused);
+        float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // m/s ; air si pitot, sinon sol
+        if (spd > 5.5f && g_varioFused < -0.1f) {                    // 5.5 m/s ~ 20 km/h
+          float ld = spd / (-g_varioFused);   // deja m/s / m/s -> ratio (etait /3.6 = bug km/h)
           if (ld > 199.0f) ld = 199.0f;
           snprintf(buf, sizeof(buf), "L/D %.0f", ld);
         } else {
@@ -2851,7 +2964,7 @@ void loop()
   if (!s_soundCfgSent && millis() > 2000) { SoundCfg_Send(); s_soundCfgSent = true; }
   Comp_Apply();     // compensation TE GPS (vitesse recue du calculateur) -> g_varioComp
   Circling_Apply(); // detection spirale / vol droit -> g_circling + g_turnDir
-  Wind_Apply();      // estimation vent (derive GPS en spirale) -> g_windSpeedKmh/g_windDirDeg
+  Wind_Apply();      // estimation vent (derive GPS en spirale) -> g_windSpeedMs/g_windDirDeg
   // Bascule auto des info-boxes affichees entre le profil Climb et Cruise, sauf pendant
   // l'edition de l'un des deux profils dans le menu (g_infoBoxConfig pointe alors
   // volontairement sur celui choisi -> ne pas l'ecraser depuis ici).
@@ -2887,6 +3000,7 @@ void loop()
   FlightLog_Tick(g_pressure, g_altitude, g_vario, g_varioFused,
                  VarioFusion_GetVertAccel(), g_volume);
   FlightLog_ServerLoop();
+  QrScreen_Tick();   // ouvre/ferme l'ecran QR selon l'etat "App connect"
 
   // --- Rapport perf (instrumentation LVGL_Driver) ---
   {
@@ -2920,7 +3034,7 @@ void loop()
     Serial.printf("[polar] netto=%+.2f stf=%.0fkm/h (mc=%.1f, airspeed=%.0f)\n",
                   g_varioNetto, g_stfSpeed, g_mcTenths / 10.0f, g_airspeed);
     Serial.printf("[wind] speed=%.1fkm/h dir=%.0f (circling=%d, trk=%.0f, gnd=%.1f)\n",
-                  g_windSpeedKmh, g_windDirDeg, g_circling ? 1 : 0, g_gpsTrack, g_gndSpeed);
+                  g_windSpeedMs, g_windDirDeg, g_circling ? 1 : 0, g_gpsTrack, g_gndSpeed);
 
     // --- Dump thermal helper (validation etape 1) ---
     if (g_circling) {

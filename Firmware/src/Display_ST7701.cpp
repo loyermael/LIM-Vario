@@ -414,6 +414,13 @@ void LCD_addWindow(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t Yen
   esp_lcd_panel_draw_bitmap(panel_handle, Xstart, Ystart, Xend, Yend, color);                     // x_end End index on x-axis (x_end not included)
 }
 
+// Resynchronise la dalle RGB apres une operation qui a desactive le cache PSRAM
+// (ex : arret complet du WiFi) et l'a laissee corrompue/figee. L'API Espressif
+// prevue pour ca redemarre le balayage DMA sur le framebuffer intact.
+void Display_Restart(void) {
+  if (panel_handle) esp_lcd_rgb_panel_restart(panel_handle);
+}
+
 
 // backlight
 uint8_t LCD_Backlight = 50;

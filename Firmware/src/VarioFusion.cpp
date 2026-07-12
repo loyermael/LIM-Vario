@@ -193,7 +193,28 @@ float VarioFusion_Step(float ax, float ay, float az,
   }
   kalman_predict(dt);
   kalman_update_acc(aVert);
-  if (newBaro && baroOk) kalman_update_alt(altitude_std(p_pa));
+  if (newBaro && baroOk) {
+    float zAlt = altitude_std(p_pa);
+    // Garde-fou anti-glitch pression (defense en profondeur, en plus du rejet cote calc) :
+    // une pression aberrante (ex : 101325 Pa transmis sur echec de lecture BMP388, OU une
+    // corruption de liaison) se traduit par un saut d'altitude de plusieurs dizaines de m.
+    // Sans garde-fou, le Kalman corrige brutalement x[1] (vitesse verticale) -> pic de vario
+    // +/-100 m/s (cause racine du "vario abuse" observe au 1er vol reel). Un vol reel ne
+    // saute JAMAIS de MAX_ALT_JUMP entre deux mesures baro. Tant que l'ecart reste transitoire
+    // on IGNORE la mesure (on tient l'estimation). Au-dela de MAX_REJECT rejets consecutifs
+    // (vrai changement soutenu / trou de liaison prolonge), on RE-INITIALISE proprement le
+    // filtre sur la nouvelle altitude (position recalee, vitesse remise a 0 -> pas de pic).
+    static const float MAX_ALT_JUMP = 60.0f;   // m
+    static const int   MAX_REJECT   = 8;        // ~ quelques 100 ms
+    static int s_altReject = 0;
+    if (fabsf(zAlt - x[0]) > MAX_ALT_JUMP) {
+      if (s_altReject < MAX_REJECT) { s_altReject++; }          // glitch transitoire -> on tient
+      else { s_altReject = 0; kalman_reset(zAlt); }             // soutenu -> re-init propre
+    } else {
+      s_altReject = 0;
+      kalman_update_alt(zAlt);
+    }
+  }
 
   static bool  aligned = false;
   static float out     = 0.0f;

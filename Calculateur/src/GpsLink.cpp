@@ -8,12 +8,16 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define GPS_AP_SSID  "LIM-Vario"
+// ⚠️ SSID DISTINCT de l'AP companion de l'ECRAN ("LIM-Vario", FlightLog.cpp) : les deux ESP32
+// creaient une AP "LIM-Vario" a 192.168.4.1 -> COLLISION. Le telephone tombait au hasard sur
+// celle du calculateur (pas de serveur web) -> l'app companion ne chargeait pas (6 juillet 2026).
+// Ici = AP de RECEPTION GPS (phone -> NMEA/UDP). L'app companion, elle, reste sur "LIM-Vario".
+#define GPS_AP_SSID  "LIM-GPS"
 #define GPS_AP_PASS  "limvario"
 #define GPS_UDP_PORT 10110
 #define KNOT_TO_MS   0.514444f
 
-// NORMAL MODE: "LIM-Vario" Access Point for GPS (NMEA/UDP from mobile phone) + baro sensor.
+// NORMAL MODE: "LIM-GPS" Access Point for GPS (NMEA/UDP from mobile phone) + baro sensor.
 // USB BRIDGE (Condor) remains AUTO-DETECTED: if "key=value" lines arrive on serial port
 // (bench testing bridge), they are ingested automatically; otherwise ignored in real flight.
 // NOTE (3 juillet 2026) : le mode STA (rejoindre la box maison) a ete essaye pour le bench
@@ -31,10 +35,13 @@ static uint32_t  g_lastMs = 0;
 static float     g_cVario   = 0.0f;  // Condor total energy vario (evario, m/s)
 static float     g_cAlt     = 0.0f;  // Condor altitude (m)
 static uint32_t  g_condorMs = 0;     // Timestamp of last Condor packet received (key=value)
+static bool      g_condorEnabled = false;  // Condor sim toggle (System menu), via GpsLink_SetCondorEnabled
+
+void GpsLink_SetCondorEnabled(bool enabled) { g_condorEnabled = enabled; }
 
 void GpsLink_Begin(void)
 {
-  // AP "LIM-Vario": receives GPS data (NMEA/UDP, port 10110) from mobile phone/navigation app.
+  // AP "LIM-GPS": receives GPS data (NMEA/UDP, port 10110) from mobile phone/navigation app.
   WiFi.persistent(false);
   WiFi.mode(WIFI_AP);
   bool ok = WiFi.softAP(GPS_AP_SSID, GPS_AP_PASS, 1, 0, 4);
@@ -77,6 +84,10 @@ static void parseNmea(char* s)
 // Reuses g_track/g_speed/g_fix so the entire downstream pipeline operates transparently.
 static void parseCondor(char* s)
 {
+  // Condor sim desactive (menu System) -> ignore completement les trames recues (pont
+  // serie toujours actif, envoie quand meme) : sinon elles marquent quand meme g_fix
+  // (partage avec le GPS reel) et figent g_cVario/g_cAlt, meme toggle sur OFF.
+  if (!g_condorEnabled) return;
   char* eq = strchr(s, '=');
   if (!eq) return;
   *eq = 0;
@@ -114,7 +125,7 @@ void GpsLink_Loop(void)
     }
   }
 
-  // 2) GPS NMEA over UDP (mobile device connected to "LIM-Vario" Access Point)
+  // 2) GPS NMEA over UDP (mobile device connected to "LIM-GPS" Access Point)
   static char buf[600];
   while (udp.parsePacket() > 0) {
     int len = udp.read(buf, sizeof(buf) - 1);

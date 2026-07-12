@@ -21,3 +21,4 @@ void example_increase_lvgl_tick(void *arg);
 
 void Lvgl_Init(void);
 void Lvgl_Loop(void);
+void Lvgl_ForceFullRedraw(void);   // invalide tout l'ecran (recup apres corruption framebuffer)

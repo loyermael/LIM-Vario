@@ -86,6 +86,7 @@ void ST7701_Init();
 
 void LCD_Init();
 void LCD_addWindow(uint16_t Xstart, uint16_t Ystart, uint16_t Xend, uint16_t Yend,uint8_t* color);
+void Display_Restart(void);   // resync dalle RGB apres corruption (ex : arret WiFi)
 
 // backlight
 void Backlight_Init();

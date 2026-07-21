@@ -55,3 +55,12 @@ __pycache__/
 
 # Historique interne KiCad (sous-repo git embarque, pas du contenu projet)
 KiCAD/*/.history/
+
+# Artefacts de build / machine (ne pas versionner)
+compile_commands.json
+AndroidApp/local.properties
+AndroidApp/**/local.properties
+*.apk
+# Gradle (build Android hors Nextcloud, cf memory)
+AndroidApp/.gradle/
+AndroidApp/**/build/

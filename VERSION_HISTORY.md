@@ -8,7 +8,16 @@ We follow **MAJOR.MINOR.PATCH** format:
 
 ---
 
-## [v0.8.1] - 2026-07-01 (Current Working Version)
+## [v0.9.0] - 2026-07-19 (Current Working Version)
+### Companion App, Status Bar & New Metrics
+- **Companion App fully working**: fixed the root cause that prevented any phone from connecting (internal RAM exhaustion — the pre-takeoff log buffer was moved from internal `.bss` to PSRAM, freeing enough DMA-capable RAM for the SoftAP to accept a client). Captive-portal DNS offering added.
+- **Native Android APK**: thin WebView wrapper (`AndroidApp/`) that joins the vario's WiFi via `WifiNetworkSpecifier` + `bindProcessToNetwork` and shows a "not connected" fallback screen.
+- **Screen status bar**: WiFi (on/off vs App connect) and battery (full/med/low from measured voltage, with hysteresis) icons wired to real state; reworked GPS icons and gauge background.
+- **New info-box metrics**: `Alerts` (LINK / SD / BAT / GPS — most severe fault, else OK) and `Mode` (Climb / Cruise). Info-box zone 5 (status pod) activated in the editor.
+- **RGB panel glitch fix**: `esp_lcd_rgb_panel_restart()` + full LVGL redraw after WiFi on/off, to recover the PSRAM framebuffer from the cache-disable transient.
+- **Simulator kept in sync** with the firmware metric list.
+
+## [v0.8.1] - 2026-07-01
 ### Internationalization & Code Base Cleanup
 - **Firmware (`lm-vario`)**:
   - Fully translated all French comments to English in `ThermalDraw.cpp`, `LVGL_Driver.cpp`, `Gyro_QMI8658.cpp`.

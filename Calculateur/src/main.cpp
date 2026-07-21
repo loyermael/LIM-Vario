@@ -1,6 +1,6 @@
 /* ============================================================
  *  L!M Vario - CALCULATOR UNIT (ESP32 DevKit V4)
- *  V0.8 : BMP388 -> altitude + instantaneous/integrated vario,
+ *  V0.9 : BMP388 -> altitude + instantaneous/integrated vario,
  *         2 rotary encoders read locally, all streamed to display via UART.
  *
  *  -> MS4525 airspeed sensor is AUTO-DETECTED: unequipped = uncompensated
@@ -96,7 +96,7 @@ void setup() {
   Serial.begin(115200);                                   // USB debug serial port
   Serial2.begin(LIM_BAUD, SERIAL_8N1, LINK_RX, LINK_TX);  // Inter-processor UART link to display
   delay(300);
-  Serial.println("\n=== L!M Vario - Calculator Unit V0.8 ===");
+  Serial.println("\n=== L!M Vario - Calculator Unit V0.9 ===");
 
   // --- I2C + BMP388 Barometric Sensor ---
   Wire.begin(PIN_SDA, PIN_SCL);

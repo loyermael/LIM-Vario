@@ -725,7 +725,7 @@ static void SetupMenu_Rotate(long d) {
   }
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
-    // Zone 5 (bandeau d'etat) activee le 19 juillet 2026 -- doit rester aligne sur main.cpp
+    // Zone 5 (status pod) activated 19 July 2026 -- must stay aligned with main.cpp
     static const int IB_ZONE_SEQ[] = {0, 1, 2, 3, 4, 5, 6};
     const int IB_ZONE_SEQ_N = 7;
     int pos = 0;
@@ -915,7 +915,7 @@ static void SetupMenu_Init(void) {
   s_ibFrames[6]=objects.ib_frame_6;
   s_ibValLabels[0]=objects.ib_val_0; s_ibValLabels[1]=objects.ib_val_1; s_ibValLabels[2]=objects.ib_val_2;
   s_ibValLabels[3]=objects.ib_val_3; s_ibValLabels[4]=objects.ib_val_4;
-  s_ibValLabels[5]=objects.ib_val_5;   // zone 5 (bandeau d'etat), ib_val_5 cree en EEZ le 19/07/2026
+  s_ibValLabels[5]=objects.ib_val_5;   // zone 5 (status pod), ib_val_5 built in EEZ on 19/07/2026
 
   s_imName[0]=objects.imname0; s_imName[1]=objects.imname1; s_imName[2]=objects.imname2;
   s_ibListNames[0]=objects.ibname0; s_ibListNames[1]=objects.ibname1; s_ibListNames[2]=objects.ibname2;

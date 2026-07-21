@@ -558,7 +558,7 @@ enum { SET_NONE, SET_HELPER, SET_BRIGHT, SET_VOLUME, SET_SINK, SET_LOGGER, SET_C
        SET_GLIDER_MODEL, SET_GLIDER_EMPTY_WT, SET_GLIDER_MAX_BAL, SET_GLIDER_V1, SET_GLIDER_SI1, SET_GLIDER_V2, SET_GLIDER_SI2, SET_GLIDER_V3, SET_GLIDER_SI3,
        SET_PROFILE_SELECT, SET_PROFILE_EDIT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
 
-#define LIM_FW_SCREEN "0.8.0"   // version firmware ecran (menu About)
+#define LIM_FW_SCREEN "0.9.0"   // screen firmware version (About menu)
 
 typedef struct { const char* label; uint8_t type; uint8_t arg; } SmItem;
 typedef struct { const char* title; const SmItem* items; uint8_t n; } SmMenu;
@@ -1155,8 +1155,8 @@ static void SetupMenu_Rotate(long d) {
   }
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
-    // Ordre de rotation : 0,1,2,3,4,5,6 (zone 5 = bandeau d'etat, activee le 19 juillet
-    // 2026 ; 6 = "Back", ajoute 2 juillet 2026 sous ib_frame_6, exclu de g_infoBoxConfig).
+    // Rotation order: 0,1,2,3,4,5,6 (zone 5 = status pod, activated 19 July 2026;
+    // 6 = "Back", added 2 July 2026 under ib_frame_6, excluded from g_infoBoxConfig).
     static const int IB_ZONE_SEQ[] = {0, 1, 2, 3, 4, 5, 6};
     const int IB_ZONE_SEQ_N = 7;
     int pos = 0;
@@ -1432,13 +1432,13 @@ static void SetupMenu_Init()
   s_ibValLabels[2] = objects.ib_val_2;
   s_ibValLabels[3] = objects.ib_val_3;
   s_ibValLabels[4] = objects.ib_val_4;
-  // Zone 5 (bandeau d'etat a droite) : ib_val_5 construit en EEZ le 19 juillet 2026
-  // -> zone ACTIVE dans l'editeur (ajoutee a IB_ZONE_SEQ).
-  // NB : son label d'AFFICHAGE (s_ibLabels[5], sur l'ecran principal) n'existe pas
-  // encore en EEZ -> la metrique est selectionnable mais rien ne s'affiche en vol.
-  // La boucle de Labels_Apply ignore proprement une zone sans label (test !s_ibLabels[i]).
-  // NE PAS creer ce label a la volee ici : c'est le pattern (lv_label_create hors EEZ)
-  // qui causait le gel "zone 1" du 1er juillet 2026.
+  // Zone 5 (status pod on the right): ib_val_5 built in EEZ on 19 July 2026
+  // -> zone ACTIVE in the editor (added to IB_ZONE_SEQ).
+  // NB: its DISPLAY label (s_ibLabels[5], on the main screen) does not yet exist
+  // in EEZ -> the metric is selectable but nothing shows in flight.
+  // The Labels_Apply loop cleanly skips a zone with no label (test !s_ibLabels[i]).
+  // DO NOT create this label on the fly here: that is the pattern (lv_label_create
+  // outside EEZ) that caused the "zone 1" freeze of 1 July 2026.
   s_ibValLabels[5] = objects.ib_val_5;
 
   s_imName[0] = objects.imname0; s_imName[1] = objects.imname1; s_imName[2] = objects.imname2;
@@ -2795,8 +2795,8 @@ static void Labels_Apply()
         break;
       }
       case IB_ALERTS: {
-        // Defaut le plus grave d'abord. LINK = donnees figees (le plus sournois),
-        // SD = perte du log, BAT = autonomie, GPS = plus de vent/trace.
+        // Most severe fault first. LINK = frozen data (the sneakiest one),
+        // SD = log lost, BAT = endurance, GPS = no more wind/track.
         if      (!g_linkOk)                  snprintf(buf, sizeof(buf), "LINK!");
         else if (!FlightLog_SdOk())          snprintf(buf, sizeof(buf), "SD!");
         else if (BAT_analogVolts < 3.60f)    snprintf(buf, sizeof(buf), "BAT!");
@@ -2805,7 +2805,7 @@ static void Labels_Apply()
         break;
       }
       case IB_MODE: {
-        // Profil d'info-boxes actif : conditionne le contenu des autres zones.
+        // Active info-box profile: drives the content of the other zones.
         snprintf(buf, sizeof(buf), g_ibEditCruiseMode ? "Cruise" : "Climb");
         break;
       }
@@ -2827,7 +2827,7 @@ static void Labels_Apply()
     }
   }
 
-  // Indicateur WiFi : ON quand le serveur companion tourne (menu "App connect")
+  // WiFi indicator: ON when the companion server is running ("App connect" menu)
   if (objects.img_wifi) {
     static int lastWifi = -1;
     int w = FlightLog_ServerActive() ? 1 : 0;
@@ -2837,20 +2837,20 @@ static void Labels_Apply()
     }
   }
 
-  // Indicateur batterie : full / med / low d'apres la tension lue par BAT_Driver.
-  // Hysteresis : sans elle, une tension pile sur un seuil ferait clignoter l'icone
-  // (et chaque changement d'image redessine la zone).
+  // Battery indicator: full / med / low from the voltage read by BAT_Driver.
+  // Hysteresis: without it, a voltage right on a threshold would flicker the icon
+  // (and each image change redraws the area).
   if (objects.img_battery) {
     static int lastBat = -1;            // 0 = low, 1 = med, 2 = full
-    const float V_FULL = 3.95f;         // seuils LiPo 1S (a ajuster selon la batterie)
+    const float V_FULL = 3.95f;         // 1S LiPo thresholds (tune to the battery)
     const float V_MED  = 3.70f;
     const float HYST   = 0.04f;
     float v = BAT_analogVolts;
     int b;
-    if (lastBat < 0) {                  // premiere evaluation : pas d'hysteresis
+    if (lastBat < 0) {                  // first evaluation: no hysteresis
       b = (v >= V_FULL) ? 2 : (v >= V_MED ? 1 : 0);
     } else {
-      b = lastBat;                      // on ne change que si on franchit le seuil + marge
+      b = lastBat;                      // only change if we cross the threshold + margin
       if      (v >= V_FULL + HYST)                          b = 2;
       else if (v <  V_FULL - HYST && v >= V_MED + HYST)     b = 1;
       else if (v <  V_MED  - HYST)                          b = 0;

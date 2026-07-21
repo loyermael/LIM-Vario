@@ -11,9 +11,9 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>L!M Vario — Companion App</title>
-<!-- PWA : icone sur l'ecran d'accueil + mode standalone (l'app ressemble a une appli).
-     NB : pas de service worker possible (HTTP sur 192.168.4.1 n'est pas un contexte
-     securise) -> pas d'ouverture hors-ligne, mais "Ajouter a l'ecran d'accueil" OK. -->
+<!-- PWA: home-screen icon + standalone mode (the app looks like a real app).
+     NB: no service worker possible (HTTP on 192.168.4.1 is not a secure context)
+     -> no offline launch, but "Add to Home Screen" works. -->
 <link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#2563eb">
 <meta name="mobile-web-app-capable" content="yes">
@@ -22,10 +22,10 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
 <meta name="apple-mobile-web-app-title" content="L!M Vario">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon.svg">
-<!-- Pas de polices externes (Google Fonts) : l'app est servie UNIQUEMENT sur l'AP WiFi du
-     vario, SANS internet -> les requetes vers fonts.googleapis.com traineraient et l'app
-     semblerait "ne pas s'ouvrir". On s'appuie sur les polices systeme (repli deja prevu
-     dans --font-sans / --font-mono). (6 juillet 2026) -->
+<!-- No external fonts (Google Fonts): the app is served ONLY on the vario's WiFi AP,
+     WITHOUT internet -> requests to fonts.googleapis.com would hang and the app would
+     seem to "not open". We rely on system fonts (fallback already defined in
+     --font-sans / --font-mono). (6 July 2026) -->
 <style>
   :root {
     --bg-app: #f4f6f9;
@@ -585,7 +585,7 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
   .tab-btn.active { color: var(--accent-blue); }
   .tab-btn:active { background: #f8fafc; }
 
-  /* ---- Ecran "non connecte au vario" (overlay plein ecran) ---- */
+  /* ---- "Not connected to the vario" screen (full-screen overlay) ---- */
   #disconnected {
     position: fixed; inset: 0; z-index: 9999;
     display: none; flex-direction: column; align-items: center; justify-content: center;
@@ -627,28 +627,28 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
   #disconnected .dc-spin { margin-top: 16px; font-size: 13px; color: var(--accent-blue); font-weight: 600; display: none; }
   #disconnected.checking .dc-spin { display: block; }
 
-  /* badge d'etat du header : rouge quand deconnecte */
+  /* header status badge: red when disconnected */
   .status-badge.offline { color: var(--danger); }
   .status-badge.offline .status-dot { background: var(--danger); }
 </style>
 </head>
 <body>
 
-<!-- Ecran affiche quand l'app ne joint plus le vario (connexion WiFi perdue). -->
+<!-- Screen shown when the app can no longer reach the vario (WiFi connection lost). -->
 <div id="disconnected">
   <div class="dc-badge">L!M</div>
-  <h1>Non connecté au vario</h1>
-  <p>Ton téléphone n'est pas (ou plus) connecté au réseau WiFi du L!M Vario.</p>
+  <h1>Not connected to the vario</h1>
+  <p>Your phone is not (or no longer) connected to the L!M Vario WiFi network.</p>
   <div class="dc-net">
-    <div class="row"><span class="k">Réseau WiFi</span><span class="v" id="dc-ssid">LIM-Vario</span></div>
-    <div class="row"><span class="k">Mot de passe</span><span class="v" id="dc-pass">limvario</span></div>
+    <div class="row"><span class="k">WiFi network</span><span class="v" id="dc-ssid">LIM-Vario</span></div>
+    <div class="row"><span class="k">Password</span><span class="v" id="dc-pass">limvario</span></div>
   </div>
   <div class="dc-actions">
-    <button class="dc-btn primary" onclick="openWifiSettings()">Ouvrir les réglages WiFi</button>
-    <button class="dc-btn ghost" onclick="retryLink()">Réessayer</button>
+    <button class="dc-btn primary" onclick="openWifiSettings()">Open WiFi settings</button>
+    <button class="dc-btn ghost" onclick="retryLink()">Retry</button>
   </div>
-  <p class="dc-hint">Astuce : sur l'écran du vario, active « App connect » puis scanne le QR code avec l'appareil photo pour rejoindre le WiFi directement.</p>
-  <div class="dc-spin">Vérification de la connexion…</div>
+  <p class="dc-hint">Tip: on the vario screen, enable "App connect" then scan the QR code with your camera to join the WiFi directly.</p>
+  <div class="dc-spin">Checking connection…</div>
 </div>
 
 <header>
@@ -1465,9 +1465,9 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
     alert('Settings successfully sent and applied to L!M Vario.');
   }
 
-  // ---- Detection connecte / non connecte au vario ----
-  // Ping periodique d'une API du vario. Deux echecs consecutifs -> ecran "non
-  // connecte". Un succes -> on masque l'ecran et on (re)charge les donnees.
+  // ---- Connected / not-connected detection ----
+  // Periodic ping of a vario API. Two consecutive failures -> "not connected"
+  // screen. A success -> hide the screen and (re)load the data.
   let linkFails = 0;
   let wasOffline = false;
   function setOnline(online) {
@@ -1478,7 +1478,7 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       dc.classList.remove('show', 'checking');
       if (badge) badge.classList.remove('offline');
       if (txt) txt.textContent = 'Connected';
-      if (wasOffline) {   // on vient de retrouver le vario -> recharge tout
+      if (wasOffline) {   // vario just came back -> reload everything
         wasOffline = false;
         loadGliderDb().then(loadConfig).then(loadProfiles);
         loadFiles(); loadScreenConfig();
@@ -1488,7 +1488,7 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
       dc.classList.add('show');
       dc.classList.remove('checking');
       if (badge) badge.classList.add('offline');
-      if (txt) txt.textContent = 'Déconnecté';
+      if (txt) txt.textContent = 'Disconnected';
     }
   }
   function checkLink() {
@@ -1500,25 +1500,25 @@ static const char COMPANION_APP_HTML[] PROGMEM = R"rawliteral(<!DOCTYPE html>
   }
   function retryLink() {
     document.getElementById('disconnected').classList.add('checking');
-    linkFails = 2;  // un seul echec suffit a re-basculer si toujours HS
+    linkFails = 2;  // a single failure is enough to flip back if still down
     checkLink();
   }
-  // Tente d'ouvrir les reglages WiFi (Android : intent ; sinon instructions a l'ecran).
+  // Tries to open the WiFi settings (Android: intent; otherwise on-screen instructions).
   function openWifiSettings() {
     const ua = navigator.userAgent || '';
     if (/Android/i.test(ua)) {
-      // Certains navigateurs Android honorent cet intent ; sinon rien ne se passe
-      // et l'utilisateur suit les infos reseau affichees juste au-dessus.
+      // Some Android browsers honor this intent; otherwise nothing happens
+      // and the user follows the network info shown just above.
       window.location.href = 'intent://#Intent;action=android.settings.WIFI_SETTINGS;end';
     } else {
-      alert('Ouvre Réglages → Wi-Fi et choisis le réseau « LIM-Vario » (mot de passe : limvario).');
+      alert('Open Settings > Wi-Fi and select the "LIM-Vario" network (password: limvario).');
     }
   }
 
   window.onload = () => {
     loadGliderDb().then(loadConfig).then(loadProfiles); loadFiles(); loadScreenConfig();
     checkLink();
-    setInterval(checkLink, 4000);   // surveille la connexion en continu
+    setInterval(checkLink, 4000);   // continuously monitor the connection
   };
 </script>
 </body>

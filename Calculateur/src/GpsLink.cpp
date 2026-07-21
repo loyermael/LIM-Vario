@@ -8,10 +8,10 @@
 #include <string.h>
 #include <stdlib.h>
 
-// ⚠️ SSID DISTINCT de l'AP companion de l'ECRAN ("LIM-Vario", FlightLog.cpp) : les deux ESP32
-// creaient une AP "LIM-Vario" a 192.168.4.1 -> COLLISION. Le telephone tombait au hasard sur
-// celle du calculateur (pas de serveur web) -> l'app companion ne chargeait pas (6 juillet 2026).
-// Ici = AP de RECEPTION GPS (phone -> NMEA/UDP). L'app companion, elle, reste sur "LIM-Vario".
+// SSID DISTINCT from the SCREEN's companion AP ("LIM-Vario", FlightLog.cpp): both ESP32s
+// were creating a "LIM-Vario" AP at 192.168.4.1 -> COLLISION. The phone would randomly land
+// on the calculator's one (no web server) -> the companion app would not load (6 July 2026).
+// This one = GPS RECEPTION AP (phone -> NMEA/UDP). The companion app stays on "LIM-Vario".
 #define GPS_AP_SSID  "LIM-GPS"
 #define GPS_AP_PASS  "limvario"
 #define GPS_UDP_PORT 10110

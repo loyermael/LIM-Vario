@@ -109,7 +109,8 @@ bool FlightLog_ServerActive(void) { return g_serverOn; }
 enum InfoBoxMetric {
   IB_VARIO_INST=0, IB_VARIO_INT=1, IB_MACCREADY=2, IB_ALT_BARO=3, IB_ALT_GPS=4,
   IB_AIRSPEED=5, IB_GND_SPEED=6, IB_TIME=7, IB_FLIGHT_TIME=8, IB_WIND=9,
-  IB_CLIMB_GAIN=10, IB_FLIGHT_LVL=11, IB_GLIDE=12, IB_EMPTY=13, IB_METRIC_MAX=14
+  IB_CLIMB_GAIN=10, IB_FLIGHT_LVL=11, IB_GLIDE=12, IB_EMPTY=13,
+  IB_NETTO=14, IB_STF=15, IB_ALERTS=16, IB_MODE=17, IB_METRIC_MAX=18
 };
 enum CenterZoneMetric { CENTER_THERMAL_HELPER=0, CENTER_WIND_DIR=1, CENTER_EMPTY=2, CENTER_METRIC_MAX=3 };
 
@@ -129,7 +130,8 @@ static lv_obj_t* s_ibValLabels[7] = {0};
 
 static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
   "Inst. Vario","Avg. Vario","MacCready","Baro Alt.","GPS Alt.","Airspeed","Gnd Speed",
-  "Time","Flight Time","Wind","Climb Gain","Flight Lvl","Glide Ratio",""
+  "Time","Flight Time","Wind","Climb Gain","Flight Lvl","Glide Ratio","",
+  "Netto","STF","Alerts","Mode"
 };
 static const char* const s_centerMetricAbbrev[CENTER_METRIC_MAX] = { "Thermal Help", "Wind Dir.", "" };
 
@@ -283,7 +285,9 @@ static const SmItem IBIT_LIST[] = {
   {"Baro Alt.", ST_INFO, IB_ALT_BARO}, {"GPS Alt.", ST_INFO, IB_ALT_GPS}, {"Time", ST_INFO, IB_TIME},
   {"Flight Time", ST_INFO, IB_FLIGHT_TIME}, {"Wind", ST_INFO, IB_WIND}, {"Climb Gain", ST_INFO, IB_CLIMB_GAIN},
   {"Flight Level", ST_INFO, IB_FLIGHT_LVL}, {"Glide Ratio", ST_INFO, IB_GLIDE}, {"Airspeed", ST_INFO, IB_AIRSPEED},
-  {"Ground Speed", ST_INFO, IB_GND_SPEED}, {"Disabled", ST_INFO, IB_EMPTY},
+  {"Ground Speed", ST_INFO, IB_GND_SPEED},
+  {"Alerts", ST_INFO, IB_ALERTS}, {"Mode", ST_INFO, IB_MODE},
+  {"Disabled", ST_INFO, IB_EMPTY},
   {"Back", ST_BACK, 0}
 };
 static const SmItem CI_LIST[] = { {"Thermal Helper",ST_INFO,0},{"Wind Direction",ST_INFO,1},{"Disabled",ST_INFO,2},{"Back",ST_BACK,0} };
@@ -298,7 +302,7 @@ static const SmItem PRIT[] = { {"Profile",ST_CHOICE,SET_PROFILE_SELECT},{"Edit",
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
   {"System",SYIT,6},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,15}
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,17}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -721,8 +725,9 @@ static void SetupMenu_Rotate(long d) {
   }
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
-    static const int IB_ZONE_SEQ[] = {0, 1, 2, 3, 4, 6};
-    const int IB_ZONE_SEQ_N = 6;
+    // Zone 5 (bandeau d'etat) activee le 19 juillet 2026 -- doit rester aligne sur main.cpp
+    static const int IB_ZONE_SEQ[] = {0, 1, 2, 3, 4, 5, 6};
+    const int IB_ZONE_SEQ_N = 7;
     int pos = 0;
     for (int k = 0; k < IB_ZONE_SEQ_N; k++) if (IB_ZONE_SEQ[k] == s_ibZoneSel) { pos = k; break; }
     pos = ((pos + (int)d) % IB_ZONE_SEQ_N + IB_ZONE_SEQ_N) % IB_ZONE_SEQ_N;
@@ -909,7 +914,8 @@ static void SetupMenu_Init(void) {
   s_ibFrames[3]=objects.ib_frame_3; s_ibFrames[4]=objects.ib_frame_4; s_ibFrames[5]=objects.ib_frame_5;
   s_ibFrames[6]=objects.ib_frame_6;
   s_ibValLabels[0]=objects.ib_val_0; s_ibValLabels[1]=objects.ib_val_1; s_ibValLabels[2]=objects.ib_val_2;
-  s_ibValLabels[3]=objects.ib_val_3; s_ibValLabels[4]=objects.ib_val_4; s_ibValLabels[5]=NULL;
+  s_ibValLabels[3]=objects.ib_val_3; s_ibValLabels[4]=objects.ib_val_4;
+  s_ibValLabels[5]=objects.ib_val_5;   // zone 5 (bandeau d'etat), ib_val_5 cree en EEZ le 19/07/2026
 
   s_imName[0]=objects.imname0; s_imName[1]=objects.imname1; s_imName[2]=objects.imname2;
   s_ibListNames[0]=objects.ibname0; s_ibListNames[1]=objects.ibname1; s_ibListNames[2]=objects.ibname2;

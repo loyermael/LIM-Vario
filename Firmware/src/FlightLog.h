@@ -19,4 +19,5 @@ void FlightLog_ServerToggle(void);
 void FlightLog_ServerLoop(void);
 bool FlightLog_ServerActive(void);
 bool FlightLog_Active(void);
+bool FlightLog_SdOk(void);      // carte SD detectee au boot (sinon log impossible)
 void FlightLog_AddError(const char* module, const char* msg);

@@ -21,13 +21,15 @@ typedef struct _objects_t {
     lv_obj_t *main;
     lv_obj_t *vario_meter;
     lv_obj_t *center_hub;
+    lv_obj_t *img_wifi;
+    lv_obj_t *img_battery;
+    lv_obj_t *img_gps;
     lv_obj_t *infobox_display_container;
     lv_obj_t *lbl_ib_haut_sup;
     lv_obj_t *lbl_ib_haut_inf;
     lv_obj_t *lbl_ib_bas_cent;
     lv_obj_t *lbl_ib_bas_sup;
     lv_obj_t *lbl_ib_bas_inf;
-    lv_obj_t *img_gps;
     lv_obj_t *img_wind_arrow;
     lv_obj_t *img_glider_wind;
     lv_obj_t *lbl_wind_value_speed;
@@ -182,7 +184,9 @@ typedef struct _objects_t {
     lv_obj_t *ib_frame_4;
     lv_obj_t *ib_val_4;
     lv_obj_t *ib_frame_5;
+    lv_obj_t *ib_val_5;
     lv_obj_t *ib_frame_6;
+    lv_obj_t *ib_val_6;
 } objects_t;
 
 extern objects_t objects;

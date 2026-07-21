@@ -173,6 +173,7 @@ void FlightLog_Init(void)
 
 bool FlightLog_Active(void)       { return g_sdOk && g_flying && !g_srvOn; }
 bool FlightLog_ServerActive(void) { return g_srvOn; }
+bool FlightLog_SdOk(void)         { return g_sdOk; }
 
 void FlightLog_AddError(const char* module, const char* msg)
 {

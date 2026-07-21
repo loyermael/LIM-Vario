@@ -13,7 +13,7 @@
 objects_t objects;
 
 static const char *screen_names[] = { "splash", "Main" };
-static const char *object_names[] = { "splash", "main", "vario_meter", "center_hub", "infobox_display_container", "lbl_ib_haut_sup", "lbl_ib_haut_inf", "lbl_ib_bas_cent", "lbl_ib_bas_sup", "lbl_ib_bas_inf", "img_gps", "img_wind_arrow", "img_glider_wind", "lbl_wind_value_speed", "lbl_wind_dir", "qr_panel", "lbl_qr_hint", "lbl_qr_title", "qr_slot", "quick_menu_panel", "item_list", "_lbl_exit", "val_profil", "obj0", "val_weight", "obj1", "val_bugs", "obj2", "val_water", "obj3", "val_qnh", "obj4", "obj5", "obj6", "selection_frame", "setup_panel", "setup_frame", "settings", "selection_frame_1", "confirm_panel", "confirm_panel_selection", "confirm_msg", "confirm_no", "confirm_yes", "item0", "item1", "item2", "item3", "item5", "item6", "item4", "display_list", "dname0", "dname1", "dname2", "dname3", "dname4", "dval2", "dval3", "infobox_mode_list", "imname0", "imname1", "imname2", "units_list", "uname0", "uval0", "uname1", "uname2", "uname4", "uval2", "uval1", "sound_list", "sname0", "sval0", "sname1", "sval1", "sname2", "sval2", "sname4", "vario_list", "vname0", "vval0", "vname1", "vval1", "vname2", "vval2", "vname3", "system_list", "syname0", "syval0", "syname1", "syval1", "syname3_", "syname6", "syname4", "syname5", "about_list", "abname0", "abval0", "abname1", "abval1", "abname2", "abval2", "abname5", "glider_list", "glname0", "glval0", "glname1", "glval1", "glname2", "glval2", "glname3", "glval3", "glname4", "glval4", "glname5", "glval5", "glname6", "glval6", "glname7", "glval7", "glname8", "glval8", "abname5_1", "profil_list", "prname0", "prval0", "prname1", "prname2", "prname3", "prname4", "prname5", "center_info_list", "cname0", "cname1", "cname2", "prname5_1", "infobox_list", "ibname15", "ibname0", "ibname1", "ibname2", "ibname3", "ibname4", "ibname5", "ibname6", "ibname7", "ibname8", "ibname9", "ibname10", "ibname11", "ibname13", "ibname14", "infobox_editor_container", "ib_frame_0", "ib_val_0", "ib_frame_1", "ib_val_1", "ib_frame_2", "ib_val_2", "ib_frame_3", "ib_val_3", "ib_frame_4", "ib_val_4", "ib_frame_5", "ib_frame_6" };
+static const char *object_names[] = { "splash", "main", "vario_meter", "center_hub", "img_wifi", "img_battery", "img_gps", "infobox_display_container", "lbl_ib_haut_sup", "lbl_ib_haut_inf", "lbl_ib_bas_cent", "lbl_ib_bas_sup", "lbl_ib_bas_inf", "img_wind_arrow", "img_glider_wind", "lbl_wind_value_speed", "lbl_wind_dir", "qr_panel", "lbl_qr_hint", "lbl_qr_title", "qr_slot", "quick_menu_panel", "item_list", "_lbl_exit", "val_profil", "obj0", "val_weight", "obj1", "val_bugs", "obj2", "val_water", "obj3", "val_qnh", "obj4", "obj5", "obj6", "selection_frame", "setup_panel", "setup_frame", "settings", "selection_frame_1", "confirm_panel", "confirm_panel_selection", "confirm_msg", "confirm_no", "confirm_yes", "item0", "item1", "item2", "item3", "item5", "item6", "item4", "display_list", "dname0", "dname1", "dname2", "dname3", "dname4", "dval2", "dval3", "infobox_mode_list", "imname0", "imname1", "imname2", "units_list", "uname0", "uval0", "uname1", "uname2", "uname4", "uval2", "uval1", "sound_list", "sname0", "sval0", "sname1", "sval1", "sname2", "sval2", "sname4", "vario_list", "vname0", "vval0", "vname1", "vval1", "vname2", "vval2", "vname3", "system_list", "syname0", "syval0", "syname1", "syval1", "syname3_", "syname6", "syname4", "syname5", "about_list", "abname0", "abval0", "abname1", "abval1", "abname2", "abval2", "abname5", "glider_list", "glname0", "glval0", "glname1", "glval1", "glname2", "glval2", "glname3", "glval3", "glname4", "glval4", "glname5", "glval5", "glname6", "glval6", "glname7", "glval7", "glname8", "glval8", "abname5_1", "profil_list", "prname0", "prval0", "prname1", "prname2", "prname3", "prname4", "prname5", "center_info_list", "cname0", "cname1", "cname2", "prname5_1", "infobox_list", "ibname15", "ibname0", "ibname1", "ibname2", "ibname3", "ibname4", "ibname5", "ibname6", "ibname7", "ibname8", "ibname9", "ibname10", "ibname11", "ibname13", "ibname14", "infobox_editor_container", "ib_frame_0", "ib_val_0", "ib_frame_1", "ib_val_1", "ib_frame_2", "ib_val_2", "ib_frame_3", "ib_val_3", "ib_frame_4", "ib_val_4", "ib_frame_5", "ib_val_5", "ib_frame_6", "ib_val_6" };
 
 screen_main_state_t screen_main_state;
 
@@ -107,6 +107,36 @@ void create_screen_main() {
             lv_obj_set_style_border_post(obj, false, LV_PART_MAIN | LV_STATE_DEFAULT);
         }
         {
+            lv_obj_t *obj = lv_img_create(parent_obj);
+            lv_obj_set_pos(obj, 0, 0);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_img_set_src(obj, &img_indicator_space);
+        }
+        {
+            // img_wifi
+            lv_obj_t *obj = lv_img_create(parent_obj);
+            objects.img_wifi = obj;
+            lv_obj_set_pos(obj, 434, 273);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_img_set_src(obj, &img_wifi_on);
+        }
+        {
+            // img_battery
+            lv_obj_t *obj = lv_img_create(parent_obj);
+            objects.img_battery = obj;
+            lv_obj_set_pos(obj, 430, 164);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_img_set_src(obj, &img_battery_full);
+        }
+        {
+            // img_gps
+            lv_obj_t *obj = lv_img_create(parent_obj);
+            objects.img_gps = obj;
+            lv_obj_set_pos(obj, 440, 218);
+            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+            lv_img_set_src(obj, &img_gps_connected);
+        }
+        {
             // infobox_display_container
             lv_obj_t *obj = lv_obj_create(parent_obj);
             objects.infobox_display_container = obj;
@@ -177,14 +207,6 @@ void create_screen_main() {
                     lv_label_set_text_static(obj, "359° 125 km/h");
                 }
             }
-        }
-        {
-            // img_gps
-            lv_obj_t *obj = lv_img_create(parent_obj);
-            objects.img_gps = obj;
-            lv_obj_set_pos(obj, 393, 330);
-            lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-            lv_img_set_src(obj, &img_gps_connected);
         }
         {
             // img_wind_arrow
@@ -1769,7 +1791,7 @@ void create_screen_main() {
             lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_border_width(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_radius(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
-            lv_obj_set_style_bg_img_src(obj, &img_vario_backgrounf, LV_PART_MAIN | LV_STATE_DEFAULT);
+            lv_obj_set_style_bg_img_src(obj, &img_vario_backroug_indic, LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_color(obj, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT);
             lv_obj_set_style_bg_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
             {
@@ -1913,8 +1935,35 @@ void create_screen_main() {
                     // ib_frame_5
                     lv_obj_t *obj = lv_obj_create(parent_obj);
                     objects.ib_frame_5 = obj;
-                    lv_obj_set_pos(obj, 365, 204);
-                    lv_obj_set_size(obj, 100, 70);
+                    lv_obj_set_pos(obj, 369, 192);
+                    lv_obj_set_size(obj, 62, 96);
+                    lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_pad_bottom(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_bg_opa(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_color(obj, lv_color_hex(0x004cc0), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_opa(obj, 255, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_border_width(obj, 3, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_radius(obj, 340, LV_PART_MAIN | LV_STATE_DEFAULT);
+                }
+                {
+                    // ib_val_5
+                    lv_obj_t *obj = lv_label_create(parent_obj);
+                    objects.ib_val_5 = obj;
+                    lv_obj_set_pos(obj, 374, 208);
+                    lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+                    lv_obj_set_style_text_color(obj, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_font(obj, &lv_font_montserrat_18, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_obj_set_style_text_align(obj, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+                    lv_label_set_text_static(obj, "Mode");
+                }
+                {
+                    // ib_frame_6
+                    lv_obj_t *obj = lv_obj_create(parent_obj);
+                    objects.ib_frame_6 = obj;
+                    lv_obj_set_pos(obj, 70, 227);
+                    lv_obj_set_size(obj, 77, 28);
                     lv_obj_set_style_pad_left(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_pad_top(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_pad_right(obj, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1926,10 +1975,10 @@ void create_screen_main() {
                     lv_obj_set_style_radius(obj, 5, LV_PART_MAIN | LV_STATE_DEFAULT);
                 }
                 {
-                    // ib_frame_6
+                    // ib_val_6
                     lv_obj_t *obj = lv_label_create(parent_obj);
-                    objects.ib_frame_6 = obj;
-                    lv_obj_set_pos(obj, 73, 226);
+                    objects.ib_val_6 = obj;
+                    lv_obj_set_pos(obj, 75, 226);
                     lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
                     lv_obj_set_style_text_color(obj, lv_color_hex(0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
                     lv_obj_set_style_text_font(obj, &lv_font_montserrat_26, LV_PART_MAIN | LV_STATE_DEFAULT);

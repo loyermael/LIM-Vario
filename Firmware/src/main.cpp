@@ -172,7 +172,9 @@ enum InfoBoxMetric {
   IB_EMPTY       = 13,
   IB_NETTO       = 14,  // vario compense de la polaire (mouvement de la masse d'air)
   IB_STF         = 15,  // vitesse optimale de croisiere (MacCready + polaire)
-  IB_METRIC_MAX  = 16
+  IB_ALERTS      = 16,  // defauts actifs (liaison / batterie / SD / GPS) sinon "OK"
+  IB_MODE        = 17,  // profil d'info-boxes actif : Climb ou Cruise
+  IB_METRIC_MAX  = 18
 };
 
 enum CenterZoneMetric {
@@ -237,7 +239,9 @@ static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
   "Glide Ratio",
   "",
   "Netto",
-  "STF"
+  "STF",
+  "Alerts",
+  "Mode"
 };
 
 static const char* const s_centerMetricAbbrev[CENTER_METRIC_MAX] = {
@@ -590,7 +594,9 @@ static const SmItem IBIT_LIST[] = {
   {"Baro Alt.", ST_INFO, IB_ALT_BARO}, {"GPS Alt.", ST_INFO, IB_ALT_GPS}, {"Time", ST_INFO, IB_TIME},
   {"Flight Time", ST_INFO, IB_FLIGHT_TIME}, {"Wind", ST_INFO, IB_WIND}, {"Climb Gain", ST_INFO, IB_CLIMB_GAIN},
   {"Flight Level", ST_INFO, IB_FLIGHT_LVL}, {"Glide Ratio", ST_INFO, IB_GLIDE}, {"Airspeed", ST_INFO, IB_AIRSPEED},
-  {"Ground Speed", ST_INFO, IB_GND_SPEED}, {"Disabled", ST_INFO, IB_EMPTY},
+  {"Ground Speed", ST_INFO, IB_GND_SPEED},
+  {"Alerts", ST_INFO, IB_ALERTS}, {"Mode", ST_INFO, IB_MODE},
+  {"Disabled", ST_INFO, IB_EMPTY},
   {"Back", ST_BACK, 0}
 };
 static const SmItem CI_LIST[] = {
@@ -621,7 +627,7 @@ static const SmItem PRIT[] = {
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
   {"System",SYIT,6},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,15}
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,17}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -1149,10 +1155,10 @@ static void SetupMenu_Rotate(long d) {
   }
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
-    // Ordre de rotation : 0,1,2,3,4,6 (zone 5 reste inactive, pas de label EEZ ; 6 = "Back",
-    // ajoute 2 juillet 2026 sous ib_frame_6, exclu de g_infoBoxConfig).
-    static const int IB_ZONE_SEQ[] = {0, 1, 2, 3, 4, 6};
-    const int IB_ZONE_SEQ_N = 6;
+    // Ordre de rotation : 0,1,2,3,4,5,6 (zone 5 = bandeau d'etat, activee le 19 juillet
+    // 2026 ; 6 = "Back", ajoute 2 juillet 2026 sous ib_frame_6, exclu de g_infoBoxConfig).
+    static const int IB_ZONE_SEQ[] = {0, 1, 2, 3, 4, 5, 6};
+    const int IB_ZONE_SEQ_N = 7;
     int pos = 0;
     for (int k = 0; k < IB_ZONE_SEQ_N; k++) if (IB_ZONE_SEQ[k] == s_ibZoneSel) { pos = k; break; }
     pos = ((pos + (int)d) % IB_ZONE_SEQ_N + IB_ZONE_SEQ_N) % IB_ZONE_SEQ_N;
@@ -1426,12 +1432,14 @@ static void SetupMenu_Init()
   s_ibValLabels[2] = objects.ib_val_2;
   s_ibValLabels[3] = objects.ib_val_3;
   s_ibValLabels[4] = objects.ib_val_4;
-  // Zone 5 : pas de label construit en EEZ (ib_val_5) -> zone INACTIVE (exclue de la
-  // rotation dans SetupMenu_Rotate). NE PAS creer de label a la volee ici : c'est
-  // exactement le pattern (lv_label_create hors EEZ) qui causait le gel "zone 1"
-  // du 1er juillet 2026. Construire ib_val_5 en EEZ (sibling de ib_frame_5, comme
-  // ib_val_0..4) pour activer cette zone.
-  s_ibValLabels[5] = NULL;
+  // Zone 5 (bandeau d'etat a droite) : ib_val_5 construit en EEZ le 19 juillet 2026
+  // -> zone ACTIVE dans l'editeur (ajoutee a IB_ZONE_SEQ).
+  // NB : son label d'AFFICHAGE (s_ibLabels[5], sur l'ecran principal) n'existe pas
+  // encore en EEZ -> la metrique est selectionnable mais rien ne s'affiche en vol.
+  // La boucle de Labels_Apply ignore proprement une zone sans label (test !s_ibLabels[i]).
+  // NE PAS creer ce label a la volee ici : c'est le pattern (lv_label_create hors EEZ)
+  // qui causait le gel "zone 1" du 1er juillet 2026.
+  s_ibValLabels[5] = objects.ib_val_5;
 
   s_imName[0] = objects.imname0; s_imName[1] = objects.imname1; s_imName[2] = objects.imname2;
 
@@ -2786,6 +2794,21 @@ static void Labels_Apply()
         snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
+      case IB_ALERTS: {
+        // Defaut le plus grave d'abord. LINK = donnees figees (le plus sournois),
+        // SD = perte du log, BAT = autonomie, GPS = plus de vent/trace.
+        if      (!g_linkOk)                  snprintf(buf, sizeof(buf), "LINK!");
+        else if (!FlightLog_SdOk())          snprintf(buf, sizeof(buf), "SD!");
+        else if (BAT_analogVolts < 3.60f)    snprintf(buf, sizeof(buf), "BAT!");
+        else if (!g_gpsOk)                   snprintf(buf, sizeof(buf), "GPS?");
+        else                                 snprintf(buf, sizeof(buf), "OK");
+        break;
+      }
+      case IB_MODE: {
+        // Profil d'info-boxes actif : conditionne le contenu des autres zones.
+        snprintf(buf, sizeof(buf), g_ibEditCruiseMode ? "Cruise" : "Climb");
+        break;
+      }
       default:
         buf[0] = '\0';
         break;
@@ -2801,6 +2824,42 @@ static void Labels_Apply()
     if (g != lastGps) {
       lastGps = g;
       lv_img_set_src(objects.img_gps, g ? &img_gps_connected : &img_gps_waiting);
+    }
+  }
+
+  // Indicateur WiFi : ON quand le serveur companion tourne (menu "App connect")
+  if (objects.img_wifi) {
+    static int lastWifi = -1;
+    int w = FlightLog_ServerActive() ? 1 : 0;
+    if (w != lastWifi) {
+      lastWifi = w;
+      lv_img_set_src(objects.img_wifi, w ? &img_wifi_on : &img_wifi_off);
+    }
+  }
+
+  // Indicateur batterie : full / med / low d'apres la tension lue par BAT_Driver.
+  // Hysteresis : sans elle, une tension pile sur un seuil ferait clignoter l'icone
+  // (et chaque changement d'image redessine la zone).
+  if (objects.img_battery) {
+    static int lastBat = -1;            // 0 = low, 1 = med, 2 = full
+    const float V_FULL = 3.95f;         // seuils LiPo 1S (a ajuster selon la batterie)
+    const float V_MED  = 3.70f;
+    const float HYST   = 0.04f;
+    float v = BAT_analogVolts;
+    int b;
+    if (lastBat < 0) {                  // premiere evaluation : pas d'hysteresis
+      b = (v >= V_FULL) ? 2 : (v >= V_MED ? 1 : 0);
+    } else {
+      b = lastBat;                      // on ne change que si on franchit le seuil + marge
+      if      (v >= V_FULL + HYST)                          b = 2;
+      else if (v <  V_FULL - HYST && v >= V_MED + HYST)     b = 1;
+      else if (v <  V_MED  - HYST)                          b = 0;
+    }
+    if (b != lastBat) {
+      lastBat = b;
+      lv_img_set_src(objects.img_battery,
+                     b == 2 ? &img_battery_full :
+                     b == 1 ? &img_battery_med  : &img_battery_low);
     }
   }
 }

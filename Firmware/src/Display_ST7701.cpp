@@ -3,7 +3,7 @@
 spi_device_handle_t SPI_handle = NULL;
 esp_lcd_panel_handle_t panel_handle = NULL;
 
-// Anti-tearing : synchronisation flush <-> VSYNC du panneau
+// Anti-tearing: flush <-> panel VSYNC synchronization
 SemaphoreHandle_t sem_vsync_end = NULL;
 SemaphoreHandle_t sem_gui_ready = NULL;
 bool example_on_vsync_event(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t *event_data, void *user_data);
@@ -372,7 +372,7 @@ void ST7701_Init()
       .disp_active_low = 0,
       .refresh_on_demand = 0,
       .fb_in_psram = true,
-      .double_fb = (ESP_PANEL_LCD_RGB_FRAME_BUF_NUM == 2),  // coherent avec num_fbs
+      .double_fb = (ESP_PANEL_LCD_RGB_FRAME_BUF_NUM == 2),  // consistent with num_fbs
       .no_fb = 0,
       .bb_invalidate_cache = 0,
     },

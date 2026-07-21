@@ -19,10 +19,10 @@ float    GpsLink_GroundSpeed(void);    // Ground speed in m/s (0 if no fix)
 float    GpsLink_Track(void);          // Ground track heading deg 0..360 (NAN if no fix)
 
 // --- CONDOR Simulator Mode (Flight sim data stream via UDP "key=val") ---
-void     GpsLink_SetCondorEnabled(bool enabled); // Condor sim toggle (System menu) : quand false,
-                                                  // les trames Condor recues (serie/UDP) sont
-                                                  // completement ignorees (pas de pollution du
-                                                  // fix GPS partage ni de g_cVario/g_cAlt figes).
+void     GpsLink_SetCondorEnabled(bool enabled); // Condor sim toggle (System menu): when false,
+                                                  // the received Condor frames (serial/UDP) are
+                                                  // completely ignored (no pollution of the shared
+                                                  // GPS fix nor frozen g_cVario/g_cAlt).
 bool     GpsLink_CondorActive(void);   // Returns true if Condor UDP telemetry received < 2 s ago
 float    GpsLink_Vario(void);          // Condor total energy vario (evario) in m/s
 float    GpsLink_Altitude(void);       // Condor barometric altitude (m)

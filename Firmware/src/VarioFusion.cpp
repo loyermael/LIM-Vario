@@ -195,15 +195,15 @@ float VarioFusion_Step(float ax, float ay, float az,
   kalman_update_acc(aVert);
   if (newBaro && baroOk) {
     float zAlt = altitude_std(p_pa);
-    // Garde-fou anti-glitch pression (defense en profondeur, en plus du rejet cote calc) :
-    // une pression aberrante (ex : 101325 Pa transmis sur echec de lecture BMP388, OU une
-    // corruption de liaison) se traduit par un saut d'altitude de plusieurs dizaines de m.
-    // Sans garde-fou, le Kalman corrige brutalement x[1] (vitesse verticale) -> pic de vario
-    // +/-100 m/s (cause racine du "vario abuse" observe au 1er vol reel). Un vol reel ne
-    // saute JAMAIS de MAX_ALT_JUMP entre deux mesures baro. Tant que l'ecart reste transitoire
-    // on IGNORE la mesure (on tient l'estimation). Au-dela de MAX_REJECT rejets consecutifs
-    // (vrai changement soutenu / trou de liaison prolonge), on RE-INITIALISE proprement le
-    // filtre sur la nouvelle altitude (position recalee, vitesse remise a 0 -> pas de pic).
+    // Pressure anti-glitch guard (defense in depth, on top of the calculator-side reject):
+    // an aberrant pressure (e.g. 101325 Pa sent on a BMP388 read failure, OR a link
+    // corruption) translates to an altitude jump of several tens of meters.
+    // Without a guard, the Kalman abruptly corrects x[1] (vertical speed) -> vario spike of
+    // +/-100 m/s (root cause of the "crazy vario" seen on the 1st real flight). A real flight
+    // NEVER jumps by MAX_ALT_JUMP between two baro measurements. While the deviation stays
+    // transient we IGNORE the measurement (we hold the estimate). Beyond MAX_REJECT consecutive
+    // rejects (a real sustained change / prolonged link loss), we cleanly RE-INITIALIZE the
+    // filter on the new altitude (position re-anchored, speed reset to 0 -> no spike).
     static const float MAX_ALT_JUMP = 60.0f;   // m
     static const int   MAX_REJECT   = 8;        // ~ quelques 100 ms
     static int s_altReject = 0;

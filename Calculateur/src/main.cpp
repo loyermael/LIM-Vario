@@ -208,26 +208,26 @@ void loop() {
 
   // --- BMP388 Barometric Readings ---
   bool  gotBaro = false;
-  // Sur ECHEC de lecture BMP388 (hoquet I2C), NE PAS retomber sur P0_PA (101325 Pa = niveau
-  // mer) : cette valeur par defaut etait transmise telle quelle a l'ecran (pkt.pressure),
-  // qui la lisait comme une CHUTE D'ALTITUDE de ~200 m -> explosion du vario fusionne
-  // (pics +/-100 m/s et plus observes dans les logs de vol reels, 1er vol). On tient la
-  // derniere pression valide a la place (P0_PA seulement si on n'a jamais eu de lecture).
+  // On a BMP388 read FAILURE (I2C hiccup), do NOT fall back to P0_PA (101325 Pa = sea
+  // level): that default value was sent as-is to the display (pkt.pressure), which read it
+  // as a ~200 m ALTITUDE DROP -> blow-up of the fused vario (+/-100 m/s spikes and more
+  // observed in the real flight logs, 1st flight). We hold the last valid pressure instead
+  // (P0_PA only if we have never had a reading).
   float p_pa = isnan(g_lastGoodP_pa) ? P0_PA : g_lastGoodP_pa;
   float tempC = 15.0f, alt = 0.0f;
   if (bmpOk && bmp.performReading()) {
     float p_raw = bmp.pressure;
-    // Outlier rejection (2 juillet 2026) : un hoquet I2C ponctuel sur le BMP388 peut
-    // renvoyer une pression brute aberrante, transmise telle quelle a 50 Hz sans filtre
-    // avant ce fix -> pic de vario/altitude cote ecran (observe : sauts de ~75 m au sol).
-    // 100 Pa entre deux echantillons consecutifs (dt ~20 ms) equivaut a ~625 m/s de
-    // vitesse verticale : jamais atteint en vol reel, donc seul un vrai glitch capteur
-    // est rejete ici (la valeur precedente valide est reutilisee pour cet echantillon).
-    // Compteur anti-blocage : si la reference elle-meme etait la valeur glitchee (ex :
-    // tout premier relevé au boot), TOUTES les vraies bonnes lectures suivantes s'en
-    // ecarteraient de +100 Pa et seraient rejetees indefiniment -> altitude figee sur
-    // la valeur foireuse (observe : alt bloquee ~20s). Au bout de 10 rejets consecutifs
-    // (~200 ms), on accepte la nouvelle lecture et on reinitialise la reference.
+    // Outlier rejection (2 July 2026): a one-off I2C hiccup on the BMP388 can return an
+    // aberrant raw pressure, sent as-is at 50 Hz with no filter before this fix -> vario/
+    // altitude spike on the screen side (observed: ~75 m jumps on the ground).
+    // 100 Pa between two consecutive samples (dt ~20 ms) is ~625 m/s of vertical speed:
+    // never reached in real flight, so only a genuine sensor glitch is rejected here
+    // (the previous valid value is reused for this sample).
+    // Anti-lockup counter: if the reference itself was the glitched value (e.g. the very
+    // first reading at boot), ALL subsequent genuinely good readings would deviate from it
+    // by +100 Pa and be rejected forever -> altitude frozen on the bad value (observed:
+    // alt stuck ~20s). After 10 consecutive rejects (~200 ms), we accept the new reading
+    // and reinitialize the reference.
     static uint8_t s_rejectStreak = 0;
     if (!isnan(g_lastGoodP_pa) && fabsf(p_raw - g_lastGoodP_pa) > 100.0f && s_rejectStreak < 10) {
       p_pa = g_lastGoodP_pa;

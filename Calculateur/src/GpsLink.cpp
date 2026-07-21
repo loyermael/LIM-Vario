@@ -20,11 +20,11 @@
 // NORMAL MODE: "LIM-GPS" Access Point for GPS (NMEA/UDP from mobile phone) + baro sensor.
 // USB BRIDGE (Condor) remains AUTO-DETECTED: if "key=value" lines arrive on serial port
 // (bench testing bridge), they are ingested automatically; otherwise ignored in real flight.
-// NOTE (3 juillet 2026) : le mode STA (rejoindre la box maison) a ete essaye pour le bench
-// test Condor -> abandonne, ESP32 en reception UDP pure perd les paquets par intermittence
-// meme avec setSleep(false)/reconnexion (RSSI correct mais paquets non fiables). La seule
-// solution qui marche pour Condor = pont USB serie (voir condor_bridge.py), qui passe par
-// le chemin "USB BRIDGE" ci-dessus, independant du WiFi.
+// NOTE (3 July 2026): STA mode (joining the home router) was tried for the Condor
+// bench test -> abandoned, an ESP32 doing pure UDP reception drops packets intermittently
+// even with setSleep(false)/reconnect (RSSI fine but packets unreliable). The only
+// solution that works for Condor = USB serial bridge (see condor_bridge.py), which goes
+// through the "USB BRIDGE" path above, independent of WiFi.
 
 static WiFiUDP   udp;
 static bool      g_up     = false;
@@ -84,9 +84,9 @@ static void parseNmea(char* s)
 // Reuses g_track/g_speed/g_fix so the entire downstream pipeline operates transparently.
 static void parseCondor(char* s)
 {
-  // Condor sim desactive (menu System) -> ignore completement les trames recues (pont
-  // serie toujours actif, envoie quand meme) : sinon elles marquent quand meme g_fix
-  // (partage avec le GPS reel) et figent g_cVario/g_cAlt, meme toggle sur OFF.
+  // Condor sim disabled (System menu) -> completely ignore the received frames (the serial
+  // bridge stays active and keeps sending): otherwise they would still set g_fix
+  // (shared with the real GPS) and freeze g_cVario/g_cAlt, even with the toggle OFF.
   if (!g_condorEnabled) return;
   char* eq = strchr(s, '=');
   if (!eq) return;
@@ -99,10 +99,10 @@ static void parseCondor(char* s)
   else if (!strcmp(s, "airspeed")) g_speed  = v;          // true airspeed (m/s)
   else if (!strcmp(s, "time"))     { /* timestamp field, no state to update */ }
   else known = false;
-  // 3 juillet 2026 : la marque "connexion active" reposait uniquement sur le champ "time=",
-  // absent (ou nomme differemment) dans les trames Condor reellement recues en test -> CONDOR
-  // restait bloque a 0 en permanence alors que evario/altitude/compass/airspeed arrivaient bien.
-  // On considere donc la liaison active des qu'un champ Condor RECONNU (quel qu'il soit) arrive.
+  // 3 July 2026: the "connection active" marker relied only on the "time=" field, which is
+  // absent (or named differently) in the Condor frames actually received in testing -> CONDOR
+  // stayed stuck at 0 permanently even though evario/altitude/compass/airspeed came through.
+  // So we consider the link active as soon as ANY RECOGNIZED Condor field arrives.
   if (known) {
     g_condorMs = millis();
     g_lastMs   = millis();

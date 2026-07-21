@@ -2,11 +2,11 @@
  *  L!M Vario - Firmware principal
  *  Carte : Waveshare ESP32-S3-Touch-LCD-2.1 (480x480 rond)
  *
- *  Drivers ecran/tactile/IMU : fournis par Waveshare
+ *  Screen/touch/IMU drivers: provided by Waveshare
  *  Interface graphique        : generee par EEZ Studio (src/ui)
  *
- *  Tous les objets LVGL sont references par leur NOM EEZ (stable).
- *  Un "Build Files" dans EEZ ne casse plus rien.
+ *  All LVGL objects are referenced by their EEZ NAME (stable).
+ *  A "Build Files" in EEZ no longer breaks anything.
  * ============================================================ */
 
 #include "Wireless.h"
@@ -30,9 +30,9 @@
 #include "esp_task_wdt.h"
 
 // ============================================================
-//  ⚠️ SIMULATION DE BANC - METTRE A 0 AVANT UN VOL REEL ⚠️
-//  1 = injecte un faux planeur qui spirale dans un thermique decentre
-//      pour voir le thermal helper sans GPS ni vol (test sur table).
+//  ⚠️ BENCH SIMULATION - SET TO 0 BEFORE A REAL FLIGHT ⚠️
+//  1 = injects a fake glider circling in an off-center thermal
+//      to see the thermal helper without GPS or flight (bench test).
 // ============================================================
 #define SIM_THERMAL  0
 
@@ -51,7 +51,7 @@ static bool g_linkSynced = false;
 
 static int32_t enc1Last = 0, enc2Last = 0;
 static bool    enc1BtnLast = false, enc2BtnLast = false;
-static volatile int g_volume = 0;    // 0..20 (defaut 0 = silence ; aligne sur sndVol du calculateur)
+static volatile int g_volume = 0;    // 0..20 (default 0 = silent; aligned with the calculator's sndVol)
 
 static uint32_t g_pktCount = 0;
 
@@ -63,29 +63,29 @@ static uint32_t g_pktCount = 0;
 static volatile float g_varioFused = 0.0f;   // vario fusionne (m/s)
 static volatile float g_varioComp  = 0.0f;   // vario apres compensation GPS (m/s)
 static volatile float g_airspeed   = 0.0f;   // vitesse AIR (MS4525 ; 0 si pas de pitot)
-static volatile float g_gndSpeed   = 0.0f;   // vitesse SOL GPS (meme unite que g_airspeed)
+static volatile float g_gndSpeed   = 0.0f;   // GPS ground speed (same unit as g_airspeed)
 static volatile float g_gpsAlt     = NAN;    // altitude GPS (m ; NaN si pas de fix)
 static volatile bool  g_gpsOk      = false;  // flag fix GPS valide (recu du calculateur)
 static volatile float g_gpsTrack   = NAN;    // cap sol GPS (deg 0..360, NaN si pas de fix)
-static volatile bool  g_circling   = false;  // true = spirale detectee (sinon vol droit)
-static volatile int   g_turnDir    = 0;      // sens de rotation : +1 droite / -1 gauche / 0
+static volatile bool  g_circling   = false;  // true = spiral detected (else straight flight)
+static volatile int   g_turnDir    = 0;      // turn direction: +1 right / -1 left / 0
 static float g_varioFiltered = NAN;   // vario apres filtre utilisateur (Fast/Med/Slow), EMA
-static float g_varioAvg      = 0.0f;  // moyenne glissante du vario (Avg climb 15/20/30 s), recalculee ecran
-static float g_climbGain     = 0.0f;  // gain d'altitude dans le thermique courant (m)
-static uint32_t g_takeoffMs  = 0;     // instant de decollage en ms (0 = pas encore decolle)
-static bool     g_inFlight   = false; // etat vol (detection decollage / atterrissage)
+static float g_varioAvg      = 0.0f;  // moving average of the vario (Avg climb 15/20/30 s), recomputed on screen
+static float g_climbGain     = 0.0f;  // altitude gain in the current thermal (m)
+static uint32_t g_takeoffMs  = 0;     // takeoff instant in ms (0 = not airborne yet)
+static bool     g_inFlight   = false; // flight state (takeoff / landing detection)
 
 // ============================================================
 //  SON VARIO (GPIO0 → MOSFET → buzzer piezo passif)
 //  Algorithme style Larus/LX :
 //    Montee  : freq 700→2000 Hz, cadence 1200→120 ms
-//    Neutre  : silence (-0.3 à +0.15 m/s)
+//    Neutral : silence (-0.3 to +0.15 m/s)
 //    Descente: 350 Hz continu (si Full) ou silence (si Mute)
 // ============================================================
 #define VARIO_PIN          0          // GPIO0 → buzzer externe (futur)
 // Buzzer interne Waveshare = EXIO_PIN8 via TCA9554 (I2C, software toggle)
-#define VARIO_DEAD_LOW    -0.30f      // m/s : seuil descente
-#define VARIO_DEAD_HIGH    0.15f      // m/s : seuil montee
+#define VARIO_DEAD_LOW    -0.30f      // m/s: sink threshold
+#define VARIO_DEAD_HIGH    0.15f      // m/s: lift threshold
 #define VARIO_VMAX         3.0f       // m/s : vario max (au-dela = cadence max)
 #define VARIO_FREQ_LOW     700        // Hz a DEAD_HIGH
 #define VARIO_FREQ_HIGH    2000       // Hz a VMAX
@@ -94,9 +94,9 @@ static bool     g_inFlight   = false; // etat vol (detection decollage / atterri
 #define VARIO_PERIOD_FAST   150       // ms : ~6 bips/s a VMAX
 #define VARIO_DUTY_ON       0.50f     // 50% bip / 50% silence (plus audible)
 
-// Arc de volume (affiche temporairement dans le moyeu quand enc2 tourne)
+// Volume arc (shown temporarily in the hub when enc2 turns)
 static lv_obj_t*  g_arcVol     = NULL;   // l'arc LVGL
-static lv_obj_t*  g_lblVolNum  = NULL;   // le chiffre au centre de l'arc
+static lv_obj_t*  g_lblVolNum  = NULL;   // the number at the center of the arc
 static uint32_t   g_volShownAt = 0;      // timestamp du dernier changement
 #define VOL_HIDE_MS  2000                // disparait apres 2s d'inactivite
 
@@ -116,7 +116,7 @@ static volatile int  g_menuIndex = 0;
 static volatile bool g_menuDirty = true;
 
 #define MENU_COUNT  7
-#define MENU_SOUND  4     // Sink Snd. est visuellement a la position 4 dans EEZ (y≈176)
+#define MENU_SOUND  4     // Sink Snd. is visually at position 4 in EEZ (y≈176)
 #define MENU_EXIT   6
 #define MENU_ROW_H  44
 
@@ -135,23 +135,23 @@ static volatile uint32_t g_menuLastActivity = 0;
 // ============================================================
 //  SETUP MENU (appui long ENC1) - navigation generique
 //  UN seul panneau EEZ (setup_panel), 5 cases item0..item4 en
-//  "selection centree" (l'item courant est toujours au milieu).
+//  "centered selection" (the current item is always in the middle).
 // ============================================================
 static volatile bool g_setupOpen = false;
-// Reglages pilotables par le menu
+// Settings controllable from the menu
 int  g_brightness   = 20;     // 0..20 (mappe x5 -> 0..100 retroeclairage), defaut = max
-bool g_helperEnable = true;   // thermal assistant on/off (gere via Info Boxes, plus dans le menu Display)
+bool g_helperEnable = true;   // thermal assistant on/off (handled via Info Boxes, no longer in the Display menu)
 bool g_loggerEnable = true;   // logger SD
-int  g_varioRange   = 5;      // +/-5 ou +/-10 m/s (echelle aiguille)
+int  g_varioRange   = 5;      // +/-5 or +/-10 m/s (needle scale)
 int  g_screenRot    = 0;      // 0/90/180/270 (plomberie ; rotation pas encore appliquee a la dalle)
 uint8_t g_uVert     = 0;      // 0=m/s 1=kt
 uint8_t g_uAlt      = 0;      // 0=m   1=ft
 uint8_t g_uSpeed    = 0;      // 0=km/h 1=kt
 int  g_tonePitch    = 700;    // Hz, frequence de base du son vario (plomberie ; effet son = calc)
 uint8_t g_waveform  = 0;      // 0=Sine 1=Square 2=Triangle
-int  g_toneSpread   = 5;      // 0-10, intensite de variation du son selon le vario
-uint8_t g_varioFilter = 1;    // 0=Fast 1=Med 2=Slow (affichage seul pour l'instant)
-uint8_t g_avgClimb    = 1;    // 0=15s 1=20s 2=30s (affichage seul pour l'instant)
+int  g_toneSpread   = 5;      // 0-10, intensity of the sound variation with the vario
+uint8_t g_varioFilter = 1;    // 0=Fast 1=Med 2=Slow (display only for now)
+uint8_t g_avgClimb    = 1;    // 0=15s 1=20s 2=30s (display only for now)
 static bool g_updateMode     = false;// WiFi OTA update (effet a cabler)
 bool g_condorSim       = false;// mode simulation Condor (bypass fusion IMU/baro dans Comp_Apply)
 
@@ -170,9 +170,9 @@ enum InfoBoxMetric {
   IB_FLIGHT_LVL  = 11,
   IB_GLIDE       = 12,
   IB_EMPTY       = 13,
-  IB_NETTO       = 14,  // vario compense de la polaire (mouvement de la masse d'air)
-  IB_STF         = 15,  // vitesse optimale de croisiere (MacCready + polaire)
-  IB_ALERTS      = 16,  // defauts actifs (liaison / batterie / SD / GPS) sinon "OK"
+  IB_NETTO       = 14,  // polar-compensated vario (air-mass movement)
+  IB_STF         = 15,  // optimal cruise speed (MacCready + polar)
+  IB_ALERTS      = 16,  // active faults (link / battery / SD / GPS) else "OK"
   IB_MODE        = 17,  // profil d'info-boxes actif : Climb ou Cruise
   IB_METRIC_MAX  = 18
 };
@@ -188,7 +188,7 @@ uint8_t g_ibConfigClimb[6]  = { IB_VARIO_INST, IB_VARIO_INT, IB_EMPTY, IB_ALT_BA
 uint8_t g_ibConfigCruise[6] = { IB_VARIO_INST, IB_MACCREADY, IB_EMPTY, IB_ALT_BARO, IB_GLIDE, IB_GND_SPEED };
 uint8_t g_centerConfigClimb = CENTER_THERMAL_HELPER;
 uint8_t g_centerConfigCruise = CENTER_WIND_DIR;
-static bool    g_ibEditCruiseMode  = true; // false=Climb, true=Cruise (Cruise = profil affiche par defaut)
+static bool    g_ibEditCruiseMode  = true; // false=Climb, true=Cruise (Cruise = default displayed profile)
 static uint8_t* g_infoBoxConfig    = g_ibConfigCruise; // pointeur vers profil actif
 
 enum InfoBoxEditState {
@@ -202,7 +202,7 @@ static int s_ibZoneSel = 0;
 static int s_ibChooseSel = 0;
 static lv_obj_t* s_ibFrames[7] = {0};   // [6] = ib_frame_6 = "Back" (ajoute 2 juillet 2026)
 static lv_obj_t* s_ibLabels[6] = {0};
-static lv_obj_t* s_ibValLabels[7] = {0};  // [6] jamais assigne : "Back" a un texte fixe, pas de valeur dynamique
+static lv_obj_t* s_ibValLabels[7] = {0};  // [6] never assigned: "Back" has fixed text, no dynamic value
 
 static const char* const s_ibMetricNames[IB_METRIC_MAX] = {
   "Inst. Vario",
@@ -373,8 +373,8 @@ float g_gliderSi3      = -2.00f;
 
 int   g_profileIdx     = 0;
 
-// Accesseurs pour g_gliderDb (reste static : evite d'exposer GliderData/le tableau brut
-// aux autres .cpp, utilise par /api/gliders dans FlightLog.cpp).
+// Accessors for g_gliderDb (stays static: avoids exposing GliderData/the raw array
+// to the other .cpp files, used by /api/gliders in FlightLog.cpp).
 int Glider_Count() { return g_gliderDbCount; }
 const char* Glider_Name(int i)   { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].name : ""; }
 int   Glider_EmptyWt(int i) { return (i >= 0 && i < g_gliderDbCount) ? g_gliderDb[i].empty_wt : 0; }
@@ -441,7 +441,7 @@ void Profile_Delete(int idx) {
   }
 }
 
-// Ecrit le nom d'un profil sans toucher a ses autres donnees (utilise par l'API companion).
+// Writes a profile's name without touching its other data (used by the companion API).
 void Profile_SetName(int idx, const char* name) {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", idx);
@@ -451,7 +451,7 @@ void Profile_SetName(int idx, const char* name) {
   p.end();
 }
 
-// Lit le nom brut d'un profil (chaine vide si non utilise) -- utilise par /api/profiles.
+// Reads a profile's raw name (empty string if unused) -- used by /api/profiles.
 void Profile_GetName(int idx, char* out, size_t outLen) {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", idx);
@@ -586,9 +586,9 @@ static const SmItem IBIT_MODE[] = {
   {"Cruise Mode", ST_INFO, 1},
   {"Back",        ST_BACK, 0}
 };
-// .arg = VRAIE valeur d'enum InfoBoxMetric (pas l'index de liste) -> lu via it->arg,
-// jamais via g_smSel brut (cf bug de decalage corrige le 2 juillet 2026 : Ground Speed
-// absent de la liste faisait glisser tout le reste d'un cran).
+// .arg = the ACTUAL InfoBoxMetric enum value (not the list index) -> read via it->arg,
+// never via the raw g_smSel (see off-by-one bug fixed on 2 July 2026: Ground Speed
+// missing from the list shifted everything else by one).
 static const SmItem IBIT_LIST[] = {
   {"Inst. Vario", ST_INFO, IB_VARIO_INST}, {"Avg. Vario", ST_INFO, IB_VARIO_INT}, {"MacCready", ST_INFO, IB_MACCREADY},
   {"Baro Alt.", ST_INFO, IB_ALT_BARO}, {"GPS Alt.", ST_INFO, IB_ALT_GPS}, {"Time", ST_INFO, IB_TIME},
@@ -635,16 +635,16 @@ static int8_t  g_smSel  = 0;
 static uint8_t g_smStk[6]; static int8_t g_smStkSel[6]; static int g_smDepth = 0;
 static bool    g_smEdit = false;
 static bool    g_smDirty = true;
-static lv_obj_t* s_smVal[7] = {0};   // labels "valeur" (a droite), crees par code
-// Sous-menu Display = liste construite a la main dans EEZ (display_list)
-static lv_obj_t* s_dName[5] = {0};   // noms : dname0..dname4 (texte ecrit dans EEZ)
+static lv_obj_t* s_smVal[7] = {0};   // "value" labels (on the right), created by code
+// Display submenu = list hand-built in EEZ (display_list)
+static lv_obj_t* s_dName[5] = {0};   // names: dname0..dname4 (text written in EEZ)
 static lv_obj_t* s_dVal[5]  = {0};   // valeurs : seuls [2]=Brightness (dval2) et [3]=Screen rot. (dval3)
 static lv_obj_t* s_uName[4] = {0};   // sous-menu Units : noms uname0..uname3
-static lv_obj_t* s_uVal[4]  = {0};   // valeurs uval0..uval2 ([3]=Back sans valeur)
+static lv_obj_t* s_uVal[4]  = {0};   // values uval0..uval2 ([3]=Back with no value)
 static lv_obj_t* s_sName[4] = {0};   // sous-menu Sound : sname0..sname2 + Back (dname4_2)
-static lv_obj_t* s_sVal[4]  = {0};   // valeurs sval0..sval2 ([3]=Back sans valeur)
+static lv_obj_t* s_sVal[4]  = {0};   // values sval0..sval2 ([3]=Back with no value)
 static lv_obj_t* s_vName[4] = {0};   // sous-menu Vario : vname0..vname2 + Back (vname3)
-static lv_obj_t* s_vVal[4]  = {0};   // valeurs vval0/vval1/vval2 ([3]=Back sans valeur)
+static lv_obj_t* s_vVal[4]  = {0};   // values vval0/vval1/vval2 ([3]=Back with no value)
 static lv_obj_t* s_syName[6] = {0};  // sous-menu System : syname0,1,3_,4,5,6 (Back)
 static lv_obj_t* s_syVal[6]  = {0};  // syval0 (App connect), syval1 (Condor), reste NULL
 static lv_obj_t* s_abName[4] = {0};  // about_list: abname0,1,2,abname5(Back)
@@ -653,10 +653,10 @@ static lv_obj_t* s_glName[10] = {0}; // sous-menu Glider info
 static lv_obj_t* s_glVal[10]  = {0};
 static lv_obj_t* s_prName[6]  = {0}; // sous-menu Profile (panel EEZ profil_list)
 static lv_obj_t* s_prVal[6]   = {0};
-char             g_profileName[8] = {0}; // nom du profil actif (affiche dans prval0 + quick menu)
+char             g_profileName[8] = {0}; // active profile name (shown in prval0 + quick menu)
 
-// Rafraichit g_profileName depuis les Preferences du profil courant (g_profileIdx).
-// Utilise par le setup menu (prval0) et le quick menu (val_profil).
+// Refreshes g_profileName from the current profile's Preferences (g_profileIdx).
+// Used by the setup menu (prval0) and the quick menu (val_profil).
 void Profile_RefreshName() {
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
@@ -678,9 +678,9 @@ bool Profile_IsUsed(int idx) {
   return used;
 }
 
-// Fait defiler "Profile" en ne montrant QUE les profils reellement nommes (masque les
-// emplacements "Empty" pendant la navigation normale -- "New" reste le seul moyen d'en
-// atteindre un vide pour lui donner un nom). Si aucun profil n'est encore nomme, defile
+// Scrolls "Profile" showing ONLY the actually-named profiles (hides the
+// "Empty" slots during normal navigation -- "New" stays the only way to
+// reach an empty one to name it). If no profile is named yet, it scrolls
 // simplement (rien a sauter).
 static void Profile_SelectNext(int d) {
   int step = (d > 0) ? 1 : -1;
@@ -710,12 +710,12 @@ static lv_obj_t* s_confirmMsg   = NULL;
 static lv_obj_t* s_confirmYes   = NULL;
 static lv_obj_t* s_confirmNo    = NULL;
 
-// Envoie la config son (pitch/forme/spread) au calculateur via lim_scfg_t.
-// Appele a chaque changement d'un reglage Sound + une fois au boot (lien etabli).
+// Sends the sound config (pitch/waveform/spread) to the calculator via lim_scfg_t.
+// Called on every Sound setting change + once at boot (link established).
 static void SoundCfg_Send() { LIM_SCFG_SEND(Serial1, g_tonePitch, g_waveform, g_toneSpread); }
 
-// Envoie l'etat des commandes vers le calculateur via lim_cmd_t : sink sound + Condor sim
-// (bitfield combine, tout renvoye a chaque changement pour ne pas ecraser l'autre etat).
+// Sends the command state to the calculator via lim_cmd_t: sink sound + Condor sim
+// (combined bitfield, everything resent on each change so as not to overwrite the other state).
 static void Cmd_SendState() {
   uint8_t cmd = (g_sinkSound ? LIM_CMD_SINK_SOUND : 0) | (g_condorSim ? LIM_CMD_CONDOR : 0);
   LIM_CMD_SEND(Serial1, cmd);
@@ -727,7 +727,7 @@ static void SmToggle(uint8_t s) {
     case SET_SINK:       g_sinkSound = !g_sinkSound; Cmd_SendState(); break;
     case SET_LOGGER:     g_loggerEnable = !g_loggerEnable; break;
     case SET_UPDATE:     g_updateMode = !g_updateMode; break;
-    case SET_CONDORSIM:  g_condorSim  = !g_condorSim;  Cmd_SendState(); break;   // active/desactive la prise en compte Condor cote calc
+    case SET_CONDORSIM:  g_condorSim  = !g_condorSim;  Cmd_SendState(); break;   // enables/disables Condor handling on the calculator side
     case SET_APPCONNECT: FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); break;  // AP WiFi + companion app + OTA
   }
   Config_Save();
@@ -735,16 +735,16 @@ static void SmToggle(uint8_t s) {
 // Editeur de nom de profil : 5 cases de caractere + cases OK/Cancel, navigation
 // 100% encodeur (remplace l'ancien clavier LVGL AZERTY, trop lent a l'encodeur).
 static lv_obj_t* s_pnContainer = NULL;
-static lv_obj_t* s_pnBox[5]    = {0};   // cadres des 5 cases
+static lv_obj_t* s_pnBox[5]    = {0};   // frames of the 5 slots
 static lv_obj_t* s_pnSlot[5]   = {0};   // labels des 5 cases
 static lv_obj_t* s_pnOkBox     = NULL;
 static lv_obj_t* s_pnCancelBox = NULL;
 static lv_obj_t* s_pnWarn      = NULL;  // "Name already exists"
 static char      s_pnBuf[6]    = {0};   // 5 caracteres + \0
-static int8_t    s_pnCursor    = 0;     // 0..4 = case caractere, 5 = OK, 6 = Cancel
-static bool      s_pnCharEdit  = false; // true = defilement du caractere de la case courante
+static int8_t    s_pnCursor    = 0;     // 0..4 = character slot, 5 = OK, 6 = Cancel
+static bool      s_pnCharEdit  = false; // true = scrolling the character of the current slot
 
-// Espace en premier = case "vide" (permet un nom < 5 caracteres).
+// Space first = "empty" slot (allows a name < 5 characters).
 static const char PN_CHARSET[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
 #define PN_CHARSET_LEN ((int)(sizeof(PN_CHARSET) - 1))
 
@@ -797,11 +797,11 @@ static void ProfileName_Close() {
 static void ProfileName_Confirm() {
   char out[6];
   memcpy(out, s_pnBuf, 6);
-  for (int i = 4; i >= 0; i--) { if (out[i] == ' ') out[i] = 0; else break; } // coupe les espaces de fin
+  for (int i = 4; i >= 0; i--) { if (out[i] == ' ') out[i] = 0; else break; } // trim trailing spaces
   if (strlen(out) == 0) { ProfileName_Close(); return; }  // rien de saisi -> comme Cancel
   if (ProfileName_IsDuplicate(out)) {
     if (s_pnWarn) { lv_label_set_text(s_pnWarn, "Name already exists"); lv_obj_clear_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN); }
-    return;  // reste dans l'editeur, rien de sauve
+    return;  // stay in the editor, nothing saved
   }
   char ns[16];
   snprintf(ns, sizeof(ns), "prof_%d", g_profileIdx);
@@ -1015,12 +1015,12 @@ static void SmValTxt(uint8_t s, char* b, int n) {
 }
 
 // ============================================================
-//  EDITEUR INFOBOX INTERACTIF (SUR FONDS DU VARIO)
+//  INTERACTIVE INFOBOX EDITOR (OVER THE VARIO BACKGROUND)
 // ============================================================
-// Breadcrumbs serie temporaires (bisection du freeze du 1er/2 juillet 2026,
-// meme methode que pour le gel LVGL precedent). A retirer une fois localise.
+// Temporary serial breadcrumbs (bisection of the 1-2 July 2026 freeze,
+// same method as for the previous LVGL freeze). Remove once located.
 #define IBDBG(...) do { Serial.printf(__VA_ARGS__); Serial.flush(); } while (0)
-static bool g_ibJustRendered = false;  // breadcrumb : true juste apres un SetupMenu_RenderList
+static bool g_ibJustRendered = false;  // breadcrumb: true right after a SetupMenu_RenderList
 
 static void InfoBox_RenderSelect() {
   IBDBG("[IB] RenderSelect zone=%d\n", s_ibZoneSel);
@@ -1046,8 +1046,8 @@ static void InfoBox_RenderSelect() {
         if (mIdx >= IB_METRIC_MAX) mIdx = IB_EMPTY;
         lv_label_set_text(s_ibValLabels[i], s_ibMetricAbbrev[mIdx]);
       }
-      // Centre le label (position EEZ = coin, pas centre) sur son cadre, quelle que
-      // soit la longueur du texte affiche (objets existants -> pas de risque de gel).
+      // Center the label (EEZ position = corner, not center) on its frame, whatever
+      // the length of the displayed text (existing objects -> no freeze risk).
       if (s_ibFrames[i]) lv_obj_align_to(s_ibValLabels[i], s_ibFrames[i], LV_ALIGN_CENTER, 0, 0);
     }
   }
@@ -1078,10 +1078,10 @@ static void SetupMenu_Open()  { g_setupOpen = true; g_menuState = MENU_CLOSED; g
 static void SetupMenu_Close() {
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); }
   if (g_ibEditState != IBEDIT_NONE) { InfoBox_CloseEdit(); }
-  // Editeur de nom de profil (New/Save/Edit) : sans ca, un appui long pendant la saisie
-  // fermait tout le setup en laissant l'editeur affiche et inaccessible pour toujours
-  // (2 juillet 2026 - plus aucun code ne pouvait le supprimer une fois g_setupOpen=false).
-  if (s_pnContainer) ProfileName_Close();  // annule sans sauver (comme avant avec le clavier)
+  // Profile name editor (New/Save/Edit): without this, a long-press while typing
+  // would close the whole setup, leaving the editor shown and unreachable forever
+  // (2 July 2026 - no code could delete it any more once g_setupOpen=false).
+  if (s_pnContainer) ProfileName_Close();  // cancel without saving (as before with the keyboard)
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
 static void SetupMenu_Back()  {
@@ -1104,9 +1104,9 @@ static void SetupMenu_Back()  {
   g_smDirty = true;
 }
 
-// Met a jour les couleurs de la popup selon la selection :
-//   Oui selectionne  -> Oui=JAUNE, Non=blanc de base, cadre sur Oui
-//   Non selectionne  -> Oui=blanc de base, Non=JAUNE, cadre sur Non
+// Updates the popup colors according to the selection:
+//   Yes selected -> Yes=YELLOW, No=default white, frame on Yes
+//   No selected  -> Yes=default white, No=YELLOW, frame on No
 static void Confirm_Render() {
   if (!s_confirmYes || !s_confirmNo) return;
   if (g_confirmSel) {   // Oui selectionne
@@ -1129,7 +1129,7 @@ static void Confirm_Show(int8_t action) {
     else if (action == SET_PROFILE_DELETE) lv_label_set_text(s_confirmMsg, "Delete profile?");
   }
   lv_obj_clear_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_move_foreground(s_confirmPanel);   // affiche au premier plan
+  lv_obj_move_foreground(s_confirmPanel);   // bring to foreground
 }
 static void Confirm_Hide() {
   g_smConfirm = -1;
@@ -1225,7 +1225,7 @@ static void SetupMenu_Press() {
     return;
   }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
-    if (s_ibZoneSel == 6) {   // "Back" (ib_frame_6) : ferme l'editeur sans choisir de zone
+    if (s_ibZoneSel == 6) {   // "Back" (ib_frame_6): closes the editor without choosing a zone
       InfoBox_CloseEdit();
       return;
     }
@@ -1240,8 +1240,8 @@ static void SetupMenu_Press() {
       // Centre : CI_LIST, enum == index directement (0,1,2), Back=3.
       g_smSel = (curVal >= 0 && curVal < 3) ? curVal : 0;
     } else {
-      // Liste metrique : g_infoBoxConfig stocke la VRAIE valeur d'enum -> chercher
-      // l'index de IBIT_LIST dont .arg correspond (le mapping n'est plus 1:1).
+      // Metric list: g_infoBoxConfig stores the ACTUAL enum value -> find
+      // the IBIT_LIST index whose .arg matches (the mapping is no longer 1:1).
       const SmMenu* mm = &SM[SM_INFOBOX_METRIC];
       int found = 0;
       for (int k = 0; k < mm->n; k++) {
@@ -1264,7 +1264,7 @@ static void SetupMenu_Press() {
       if (g_ibEditCruiseMode) g_centerConfigCruise = (uint8_t)g_smSel;
       else g_centerConfigClimb = (uint8_t)g_smSel;
     } else {
-      // Ecrit la VRAIE valeur d'enum (it->arg), pas l'index brut dans la liste.
+      // Writes the ACTUAL enum value (it->arg), not the raw list index.
       g_infoBoxConfig[s_ibZoneSel] = (uint8_t)SM[SM_INFOBOX_METRIC].items[g_smSel].arg;
     }
     IBDBG("[IB] before Config_Save\n");
@@ -1297,10 +1297,10 @@ static void SetupMenu_Press() {
   g_smDirty = true;
 }
 
-// Position verticale (dans le panneau) des 5 cases ; case 2 = centre = sous la barre.
+// Vertical position (in the panel) of the 5 slots; slot 2 = center = under the bar.
 static const int SM_ROW_Y[5] = { 88, 143, 198, 253, 308 };
 
-// Prepare les 5 cases : grosse police, centrees horizontalement, panneau cache.
+// Prepares the 5 slots: large font, horizontally centered, panel hidden.
 static void SetupMenu_Init()
 {
   lv_obj_t* slots[7] = { objects.item0, objects.item1, objects.item2, objects.item3, objects.item5, objects.item6, objects.item4 };
@@ -1308,7 +1308,7 @@ static void SetupMenu_Init()
     lv_obj_set_size(slots[i], LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_text_font(slots[i], &lv_font_montserrat_40, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(slots[i], lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-    // label "valeur" appaire, aligne a DROITE (rempli par SetupMenu_Apply)
+    // paired "value" label, RIGHT-aligned (filled by SetupMenu_Apply)
     s_smVal[i] = lv_label_create(objects.setup_panel);
     lv_obj_set_style_text_font(s_smVal[i], &lv_font_montserrat_40, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_text_color(s_smVal[i], lv_color_hex(0xfbd500), LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1324,34 +1324,34 @@ static void SetupMenu_Init()
   lv_obj_align(s_smVal[5], LV_ALIGN_TOP_RIGHT, -50, 362);
   lv_obj_align(objects.item4, LV_ALIGN_TOP_MID, 0, 417);
   lv_obj_align(s_smVal[6], LV_ALIGN_TOP_RIGHT, -50, 417);
-  // Pas de scroll (la barre large depasse -> sinon des scrollbars apparaissent).
+  // No scroll (the wide bar overflows -> otherwise scrollbars appear).
   lv_obj_clear_flag(objects.setup_panel, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_set_scrollbar_mode(objects.setup_panel, LV_SCROLLBAR_MODE_OFF);
 
-  // Barre de selection : 100% telle que definie dans EEZ (pos -31,193, taille 500x53,
-  // contour jaune semi-transparent). Le code n'y touche PLUS (ni position, ni taille, ni style),
-  // elle reste FIXE pour toutes les listes.
+  // Selection bar: exactly as defined in EEZ (pos -31,193, size 500x53,
+  // semi-transparent yellow outline). The code no longer touches it (position, size or style),
+  // it stays FIXED for all lists.
 
-  // --- Sous-menu Display (display_list construit a la main dans EEZ) ---
-  // Tableaux de raccourci (le code ne touche PAS au texte des noms, ecrit dans EEZ).
+  // --- Display submenu (display_list hand-built in EEZ) ---
+  // Shortcut arrays (the code does NOT touch the name text, written in EEZ).
   s_dName[0] = objects.dname0; s_dName[1] = objects.dname1; s_dName[2] = objects.dname2;
   s_dName[3] = objects.dname3; s_dName[4] = objects.dname4;
   s_dVal[2] = objects.dval2; s_dVal[3] = objects.dval3;
-  // Defilement facon quick menu (item_list) : le cadre reste FIXE, c'est la liste qui glisse.
-  // Snap off, pas de scrollbar, gros padding haut/bas pour pouvoir centrer la 1ere/derniere ligne
-  // dans le cadre. Le padding decale la liste mais le scroll recentre -> invisible.
+  // Quick-menu-style scrolling (item_list): the frame stays FIXED, the list slides.
+  // Snap off, no scrollbar, large top/bottom padding to center the first/last line
+  // in the frame. The padding shifts the list but the scroll re-centers -> invisible.
   lv_obj_set_scrollbar_mode(objects.display_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(objects.display_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.display_list, LV_OBJ_FLAG_HIDDEN);
 
-  // --- Sous-menu Units (units_list construit a la main dans EEZ) ---
+  // --- Units submenu (units_list hand-built in EEZ) ---
   s_uName[0] = objects.uname0; s_uName[1] = objects.uname1; s_uName[2] = objects.uname2; s_uName[3] = objects.uname4;  // Back
   s_uVal[0] = objects.uval0; s_uVal[1] = objects.uval1; s_uVal[2] = objects.uval2;
   lv_obj_set_scrollbar_mode(objects.units_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(objects.units_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.units_list, LV_OBJ_FLAG_HIDDEN);
 
-  // --- Sous-menu Sound (sound_list construit a la main dans EEZ) ---
+  // --- Sound submenu (sound_list hand-built in EEZ) ---
   s_sName[0] = objects.sname0; s_sName[1] = objects.sname1; s_sName[2] = objects.sname2; s_sName[3] = objects.sname4;  // Back
   s_sVal[0] = objects.sval0; s_sVal[1] = objects.sval1; s_sVal[2] = objects.sval2;
   lv_obj_set_scrollbar_mode(objects.sound_list, LV_SCROLLBAR_MODE_OFF);
@@ -1365,7 +1365,7 @@ static void SetupMenu_Init()
   lv_obj_add_flag(objects.vario_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.vario_list, LV_OBJ_FLAG_HIDDEN);
 
-  // --- Sous-menu System (system_list construit a la main dans EEZ) ---
+  // --- System submenu (system_list hand-built in EEZ) ---
   // Ordre EEZ exact (position Y croissante): syname0=App connect, syname1=Condor sim,
   // syname3_=Reset config, syname4=Factory reset, syname5=About, syname6=Back
   s_syName[0] = objects.syname0;  s_syName[1] = objects.syname1;
@@ -1410,7 +1410,7 @@ static void SetupMenu_Init()
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.profil_list, LV_OBJ_FLAG_HIDDEN);
 
-  // --- Ecran QR code (partage WiFi "App connect", cf QrScreen_*) ---
+  // --- QR code screen (WiFi sharing "App connect", see QrScreen_*) ---
   if (objects.qr_panel) lv_obj_add_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
 
   // --- Editeur Info boxes construit en EEZ ---
@@ -1491,7 +1491,7 @@ static void SetupMenu_Init()
   lv_obj_add_flag(objects.setup_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
-// Masque tous les conteneurs de sous-menus EEZ (display/units/sound). L'actif est reaffiche apres.
+// Hides all EEZ submenu containers (display/units/sound). The active one is re-shown after.
 static void SetupMenu_HideLists()
 {
   if (objects.display_list)             lv_obj_add_flag(objects.display_list, LV_OBJ_FLAG_HIDDEN);
@@ -1513,13 +1513,13 @@ static void SetupMenu_ApplyItemZoom(lv_obj_t* obj, lv_coord_t cy, lv_coord_t fra
   lv_obj_set_style_transform_zoom(obj, 256, LV_PART_MAIN | LV_STATE_DEFAULT);
 }
 
-// Positions EEZ des items du menu racine (item0..item4), respectees telles quelles.
+// EEZ positions of the root menu items (item0..item4), kept as-is.
 static const lv_coord_t ROOT_BX[7] = { 145, 154, 168, 145, 117, 155, 181 };
 static const lv_coord_t ROOT_BY[7] = {  87, 142, 197, 252, 307, 362, 417 };
 
 // Rendu du menu racine "Settings" : item0..4 gardent leurs textes/positions EEZ
-// (ordre Display/Sound/Vario/System/Exit), la liste DEFILE en groupe pour centrer l'item
-// selectionne dans le cadre fixe, et les items hors du cadre setup_frame disparaissent.
+// (order Display/Sound/Vario/System/Exit), the list SCROLLS as a group to center the
+// selected in the fixed frame, and items outside the setup_frame frame disappear.
 static void SetupMenu_RenderRoot()
 {
   IBDBG("[IB] RenderRoot enter smSel=%d\n", g_smSel);
@@ -1533,15 +1533,15 @@ static void SetupMenu_RenderRoot()
     lv_obj_clear_flag(it[i], LV_OBJ_FLAG_HIDDEN);
     if (s_smVal[i]) lv_obj_add_flag(s_smVal[i], LV_OBJ_FLAG_HIDDEN);   // racine = pas de valeurs
   }
-  // Defilement de groupe : amene l'item selectionne dans le cadre fixe (comme Display).
+  // Group scrolling: brings the selected item into the fixed frame (like Display).
   lv_obj_update_layout(objects.main);
   lv_area_t fa, la;
   lv_obj_get_coords(objects.selection_frame_1, &fa);
   lv_obj_get_coords(it[g_smSel], &la);
   lv_coord_t delta = ((la.y1 + la.y2) / 2) - ((fa.y1 + fa.y2) / 2);
   for (int i = 0; i < 7; i++) lv_obj_align(it[i], LV_ALIGN_TOP_MID, 0, ROOT_BY[i] - delta);
-  // Masque les items : en HAUT un peu avant le cadre du titre (setup_frame.y1),
-  // en BAS seulement au bord rond de l'ecran (objects.main).
+  // Hide items: at the TOP a bit before the title frame (setup_frame.y1),
+  // at the BOTTOM only at the round edge of the screen (objects.main).
   lv_obj_update_layout(objects.main);
   lv_area_t sf, mn; lv_obj_get_coords(objects.setup_frame, &sf); lv_obj_get_coords(objects.main, &mn);
   lv_coord_t topY = 85, botY = 460;
@@ -1560,20 +1560,20 @@ static void SetupMenu_RenderRoot()
 }
 
 // Rendu GENERIQUE d'un sous-menu EEZ (conteneur a positions absolues).
-// Les items sont places a Y = ITEM_Y0 + i*ITEM_STEP dans le conteneur (pos absolue dans EEZ).
-// On deplace le CONTENEUR entier en Y pour centrer l'item selectionne dans le cadre fixe.
+// Items are placed at Y = ITEM_Y0 + i*ITEM_STEP in the container (absolute pos in EEZ).
+// We move the WHOLE CONTAINER in Y to center the selected item in the fixed frame.
 // Pas de scroll_by (cumul de drift) : on utilise lv_obj_set_y directement.
-//   ITEM_Y0  = position Y du premier item dans le conteneur (108 dans tous nos menus EEZ)
-//   ITEM_STEP = pas vertical entre items (55 px dans tous nos menus EEZ)
+//   ITEM_Y0  = Y position of the first item in the container (108 in all our EEZ menus)
+//   ITEM_STEP = vertical step between items (55 px in all our EEZ menus)
 //   container_base_y = position Y native du conteneur (tiree de EEZ, -18 ou -21)
-static const lv_coord_t EEZ_ITEM_Y0   = 108;   // Y du premier item dans le conteneur
+static const lv_coord_t EEZ_ITEM_Y0   = 108;   // Y of the first item in the container
 static const lv_coord_t EEZ_ITEM_STEP = 55;    // pas entre items
 
 static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t** vals,
                                   const SmMenu* m)
 {
   IBDBG("[IB] RenderList container=%p n=%d smSel=%d\n", (void*)container, m->n, g_smSel);
-  // Cache les slots generiques + tous les autres conteneurs ; affiche celui-ci
+  // Hides the generic slots + all other containers; shows this one
   lv_obj_t* slots[7] = { objects.item0, objects.item1, objects.item2, objects.item3, objects.item5, objects.item6, objects.item4 };
   for (int i = 0; i < 7; i++) {
     lv_obj_add_flag(slots[i], LV_OBJ_FLAG_HIDDEN);
@@ -1591,7 +1591,7 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
     lv_obj_clear_flag(names[i], LV_OBJ_FLAG_HIDDEN);
     if (vals[i]) lv_obj_clear_flag(vals[i], LV_OBJ_FLAG_HIDDEN);
     const SmItem* it = &m->items[i];
-    // Couleur du nom : rouge pour Back, blanc sinon
+    // Name color: red for Back, white otherwise
     lv_obj_set_style_text_color(names[i],
       lv_color_hex(it->type == ST_BACK ? 0xff0000 : 0xffffff),
       LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -1610,7 +1610,7 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
   }
 
   IBDBG("[IB] RenderList: items filled, centering\n");
-  // Centrage : on mesure les vraies coordonnees pour calculer le delta exact.
+  // Centering: we measure the real coordinates to compute the exact delta.
   lv_obj_update_layout(objects.main);
   lv_area_t fa, ia;
   lv_obj_get_coords(objects.selection_frame_1, &fa);
@@ -1623,7 +1623,7 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
   }
 
   IBDBG("[IB] RenderList: centering done, masking\n");
-  // Masquage : visible seulement entre le bas du titre et le bord de l'ecran.
+  // Masking: visible only between the bottom of the title and the screen edge.
   lv_obj_update_layout(objects.main);
   lv_coord_t topY = 85, botY = 460;
   lv_area_t la;
@@ -1651,9 +1651,9 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
   g_ibJustRendered = true;
 }
 
-// Rendu "selection centree" : l'item courant est toujours dans la case 2 (centre,
-// sous la barre). Les voisins remplissent les cases au-dessus/dessous ; au-dela
-// du menu -> case masquee. Appele a chaque loop, ne fait rien si rien n'a change.
+// "Centered selection" rendering: the current item is always in slot 2 (center,
+// under the bar). Neighbors fill the slots above/below; beyond
+// the menu -> slot hidden. Called every loop, does nothing if nothing changed.
 static void SetupMenu_Apply()
 {
   if (!g_smDirty) return;
@@ -1673,7 +1673,7 @@ static void SetupMenu_Apply()
 
   const SmMenu* m = &SM[g_smMenu];
   lv_label_set_text(objects.settings, m->title);
-  // Display = liste construite a la main dans EEZ ; les autres menus = slots generiques item0..4
+  // Display = list hand-built in EEZ; the other menus = generic slots item0..4
   if (g_smMenu == SM_ROOT)    { SetupMenu_RenderRoot(); return; }
   if (g_smMenu == SM_DISPLAY) { SetupMenu_RenderList(objects.display_list, s_dName, s_dVal, m); return; }
   if (g_smMenu == SM_UNITS)   { SetupMenu_RenderList(objects.units_list,   s_uName, s_uVal, m); return; }
@@ -1701,7 +1701,7 @@ static void SetupMenu_Apply()
       lv_label_set_text(objects.settings, ciMenu.title);
       SetupMenu_RenderList(objects.center_info_list, s_ciListNames, s_ciListVals, &ciMenu);
     } else {
-      // Numerotation visuelle "Infobox 1..5" qui saute la zone 2 (reservee au centre) :
+      // Visual numbering "Infobox 1..5" that skips zone 2 (reserved for the center):
       // zones 0,1 -> 1,2 ; zones 3,4,5 -> 3,4,5.
       char title[16];
       int n = (s_ibZoneSel < 2) ? (s_ibZoneSel + 1) : s_ibZoneSel;
@@ -1713,9 +1713,9 @@ static void SetupMenu_Apply()
     return;
   }
   if (g_smMenu == SM_PROFILE) {
-    // SetupMenu_RenderList() ecrit un texte generique "Profile N" sur vals[0] (ST_CHOICE
-    // -> SmValTxt(SET_PROFILE_SELECT)) : le nom personnalise DOIT etre applique APRES,
-    // sinon il est aussitot ecrase (observe : Edit/Save/Delete semblaient sans effet).
+    // SetupMenu_RenderList() writes a generic "Profile N" text on vals[0] (ST_CHOICE
+    // -> SmValTxt(SET_PROFILE_SELECT)): the custom name MUST be applied AFTER,
+    // otherwise it is immediately overwritten (observed: Edit/Save/Delete seemed to have no effect).
     SetupMenu_RenderList(objects.profil_list, s_prName, s_prVal, m);
     Profile_RefreshName();
     lv_label_set_text(objects.prval0, g_profileName);
@@ -1730,8 +1730,8 @@ static void SetupMenu_Apply()
   lv_obj_get_coords(objects.selection_frame_1, &fa);
   lv_coord_t frame_cy = (fa.y1 + fa.y2) / 2;
   for (int row = 0; row < 5; row++) {
-    int idx = (int)g_smSel + (row - 2);                 // row 2 = centre = selectionne
-    if (idx < 0 || idx >= m->n) {                       // case hors menu -> tout masque
+    int idx = (int)g_smSel + (row - 2);                 // row 2 = center = selected
+    if (idx < 0 || idx >= m->n) {                       // slot outside the menu -> everything hidden
       lv_obj_add_flag(slots[row],   LV_OBJ_FLAG_HIDDEN);
       lv_obj_add_flag(s_smVal[row], LV_OBJ_FLAG_HIDDEN);
       continue;
@@ -1741,15 +1741,15 @@ static void SetupMenu_Apply()
     bool hasVal = !(it->type == ST_SUB || it->type == ST_BACK || it->arg == SET_NONE);
 
     lv_label_set_text(slots[row], it->label);
-    // rouge uniquement pour Exit/Back ; blanc sinon
+    // red only for Exit/Back; white otherwise
     lv_obj_set_style_text_color(slots[row], lv_color_hex(it->type == ST_BACK ? 0xff0000 : 0xffffff),
                                 LV_PART_MAIN | LV_STATE_DEFAULT);
 
-    if (hasVal) {                                       // reglage : nom a GAUCHE, valeur a DROITE
+    if (hasVal) {                                       // setting: name on the LEFT, value on the RIGHT
       lv_obj_align(slots[row], LV_ALIGN_TOP_LEFT, 50, SM_ROW_Y[row]);
       char v[16]; SmValTxt(it->arg, v, sizeof(v));
       char vb[20];
-      bool ed = (g_smEdit && idx == (int)g_smSel);      // en edition : valeur entre [ ]
+      bool ed = (g_smEdit && idx == (int)g_smSel);      // editing: value between [ ]
       snprintf(vb, sizeof(vb), ed ? "[%s]" : "%s", v);
       lv_label_set_text(s_smVal[row], vb);
       lv_obj_align(s_smVal[row], LV_ALIGN_TOP_RIGHT, -50, SM_ROW_Y[row]);
@@ -1758,7 +1758,7 @@ static void SetupMenu_Apply()
       lv_area_t la; lv_obj_get_coords(slots[row], &la);
       SetupMenu_ApplyItemZoom(slots[row], (la.y1+la.y2)/2, frame_cy);
       SetupMenu_ApplyItemZoom(s_smVal[row], (la.y1+la.y2)/2, frame_cy);
-    } else {                                            // categorie / Back : nom CENTRE, pas de valeur
+    } else {                                            // category / Back: name CENTERED, no value
       lv_obj_align(slots[row], LV_ALIGN_TOP_MID, 0, SM_ROW_Y[row]);
       lv_obj_add_flag(s_smVal[row], LV_OBJ_FLAG_HIDDEN);
       lv_obj_update_layout(objects.main);
@@ -1769,7 +1769,7 @@ static void SetupMenu_Apply()
 }
 
 // ============================================================
-//  ECRAN QR CODE (partage WiFi "App connect")
+//  QR CODE SCREEN (WiFi sharing "App connect")
 // ============================================================
 static lv_obj_t* s_qrCode = NULL;
 static bool      g_qrOpen = false;
@@ -1777,14 +1777,14 @@ static bool      s_qrServerWasActive = false;
 
 static void QrScreen_Show() {
   if (!s_qrCode && objects.qr_slot) {
-    // qr_slot est un lv_obj_create() brut (EEZ) : scrollable + padding/bordure de theme par
-    // defaut -> le QR (meme taille que le slot) depassait la zone de contenu, d'ou scrollbars
-    // visibles + QR decale au lieu d'etre centre. On neutralise le style par defaut.
+    // qr_slot is a raw lv_obj_create() (EEZ): scrollable + theme padding/border by
+    // default -> the QR (same size as the slot) overflowed the content area, hence scrollbars
+    // visible + QR shifted instead of centered. We neutralize the default style.
     lv_obj_clear_flag(objects.qr_slot, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_set_style_pad_all(objects.qr_slot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_border_width(objects.qr_slot, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(objects.qr_slot, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
-    // qr_panel est transparent dans EEZ -> le fond du menu System restait visible en dessous.
+    // qr_panel is transparent in EEZ -> the System menu background stayed visible underneath.
     lv_obj_set_style_bg_opa(objects.qr_panel, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_color(objects.qr_panel, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
 
@@ -1796,8 +1796,8 @@ static void QrScreen_Show() {
   if (objects.qr_panel) {
     lv_obj_clear_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(objects.qr_panel);   // construit tot dans l'arbre EEZ (avant setup/quick menu)
-                                                 // -> sans ca, reste cache derriere ces panneaux si ouvert
-                                                 // pendant que le setup menu est encore affiche
+                                                 // -> without this, it stays hidden behind those panels if open
+                                                 // while the setup menu is still shown
   }
   g_qrOpen = true;
 }
@@ -1807,9 +1807,9 @@ static void QrScreen_Close() {
   g_qrOpen = false;
 }
 
-// Ouvre automatiquement des que "App connect" (menu System) passe OFF->ON ; se referme
-// tout seul si le serveur repasse OFF (plus rien a scanner). Fermeture manuelle (appui
-// long ENC1, cf menu_onLongPress) = ferme juste l'overlay, NE COUPE PAS le WiFi.
+// Opens automatically as soon as "App connect" (System menu) goes OFF->ON; closes
+// on its own if the server goes OFF again (nothing left to scan). Manual close (long
+// press ENC1, see menu_onLongPress) = just closes the overlay, does NOT turn off WiFi.
 static void QrScreen_Tick() {
   bool active = FlightLog_ServerActive();
   if (active && !s_qrServerWasActive) QrScreen_Show();
@@ -1818,15 +1818,15 @@ static void QrScreen_Tick() {
 }
 
 // ============================================================
-//  LOGIQUE MENU (appelee depuis la tache encodeur, pas LVGL)
+//  MENU LOGIC (called from the encoder task, not LVGL)
 // ============================================================
 static uint32_t g_lastLongPressTime = 0;
 static uint32_t g_lastButtonTime    = 0;
 
 static void menu_onButton()
 {
-  if (g_qrOpen) { QrScreen_Close(); return; }   // overlay QR modal : n'importe quel clic la ferme (comme "Back")
-  if (millis() - g_lastLongPressTime < 600) return; // ignore rebonds/relâchement après appui long
+  if (g_qrOpen) { QrScreen_Close(); return; }   // modal QR overlay: any click closes it (like "Back")
+  if (millis() - g_lastLongPressTime < 600) return; // ignore bounces/release after a long-press
   if (millis() - g_lastButtonTime < 250)    return; // anti-rebond entre clics courts
   g_lastButtonTime = millis();
   g_menuLastActivity = millis();
@@ -1847,13 +1847,13 @@ static void menu_onButton()
 
 static void menu_onLongPress()
 {
-  if (millis() - g_lastLongPressTime < 1000) return; // ignore maintien continu ou rebond électrique
+  if (millis() - g_lastLongPressTime < 1000) return; // ignore continuous hold or electrical bounce
   g_lastLongPressTime = millis();
   g_menuLastActivity = millis();
-  if (g_qrOpen)                     QrScreen_Close();       // ferme juste l'overlay QR (le WiFi reste actif)
-  else if (g_setupOpen)             SetupMenu_Close();       // dans le setup : ferme tout et revient au vario
-  else if (g_menuState != MENU_CLOSED) { g_menuState = MENU_CLOSED; g_menuDirty = true; }  // ferme le quick menu
-  else                              SetupMenu_Open();        // ouvre le setup
+  if (g_qrOpen)                     QrScreen_Close();       // just closes the QR overlay (WiFi stays active)
+  else if (g_setupOpen)             SetupMenu_Close();       // in setup: closes everything and returns to the vario
+  else if (g_menuState != MENU_CLOSED) { g_menuState = MENU_CLOSED; g_menuDirty = true; }  // closes the quick menu
+  else                              SetupMenu_Open();        // opens the setup
 }
 
 static void menu_onRotate(long delta)
@@ -1880,12 +1880,12 @@ static void menu_onRotate(long delta)
       case MENU_SOUND:
         if (delta > 0) g_sinkSound = true;
         else if (delta < 0) g_sinkSound = false;
-        // Envoyer immediatement la commande vers le Calculateur
+        // Immediately send the command to the calculator
         Cmd_SendState();
         break;
-      case 5:  // Profil : bascule vers un autre profil enregistre (glider + info boxes)
+      case 5:  // Profile: switch to another saved profile (glider + info boxes)
                 // Config_Save() differe a la sortie d'edition (menu_onButton), pas ici :
-                // sinon ecriture NVS complete a chaque cran d'encodeur -> bloque LVGL.
+                // otherwise a full NVS write on every encoder detent -> blocks LVGL.
         Profile_SelectNext((int)delta);
         break;
     }
@@ -1920,7 +1920,7 @@ static void Link_HandleEncoders(const lim_packet_t* p)
   long d1 = (long)p->enc1_count - (long)enc1Last;
   if (d1 != 0) {
     enc1Last = p->enc1_count;
-    // Anti-rebond : ignore les micro-oscillations (+1 puis -1 dans les 80ms)
+    // Debounce: ignore micro-oscillations (+1 then -1 within 80ms)
     static int32_t lastDir1 = 0;
     static uint32_t lastRot1Ms = 0;
     int32_t dir = (d1 > 0) ? 1 : -1;
@@ -2003,10 +2003,10 @@ static void Link_HandleEncoders(const lim_packet_t* p)
   if (s_b2Debounced && !btn2LongFired && (now - btn2DownTime) > LONG_PRESS_MS) {
     btn2LongFired = true;
     if (g_qrOpen) {
-      QrScreen_Close();   // overlay QR modal : ferme au lieu de re-basculer App connect
+      QrScreen_Close();   // modal QR overlay: close instead of re-toggling App connect
     } else {
       FlightLog_ServerToggle();      // appui long enc2 = WiFi logs ON/OFF
-      g_updateMode = FlightLog_ServerActive();  // garde le toggle "App connect" du menu coherent
+      g_updateMode = FlightLog_ServerActive();  // keeps the menu's "App connect" toggle consistent
     }
   }
   enc2BtnLast = s_b2Debounced;
@@ -2021,8 +2021,8 @@ static void Link_Poll()
   // Timeout : plus de paquet depuis 3 s -> lien considere perdu
   if (g_linkOk && (millis() - lastPktMs) > 3000) {
     g_linkOk     = false;
-    g_linkSynced = false;   // force re-sync encodeurs a la reconnexion
-    FlightLog_AddError("LINK", "Perte de liaison série UART avec le calculateur (>3000ms)");
+    g_linkSynced = false;   // force encoder re-sync on reconnection
+    FlightLog_AddError("LINK", "Lost UART serial link with the calculator (>3000ms)");
   }
 
   while (Serial1.available()) {
@@ -2051,7 +2051,7 @@ static void Link_Poll()
         g_gpsAlt   = p->gps_alt;
         g_gpsOk    = (p->flags & LIM_FLAG_GPS_OK) != 0;
         g_gpsTrack = p->gps_track;
-        // Reconnexion : resync l'etat des commandes (sink sound + Condor sim) vers le calculateur
+        // Reconnection: resync the command state (sink sound + Condor sim) to the calculator
         if (!g_linkOk) {
           Cmd_SendState();
         }
@@ -2066,8 +2066,8 @@ static void Link_Poll()
 //  APPLICATION LVGL (dans loop() = thread LVGL = safe)
 // ============================================================
 
-// Retourne le label NOM de chaque item (utilise pour le centrage)
-// Ordre VISUEL dans EEZ (par position Y croissante) :
+// Returns the NAME label of each item (used for centering)
+// VISUAL order in EEZ (by increasing Y position):
 //   0=QNH(y=0) 1=Water(y=44) 2=Bugs(y=88) 3=PilotWt(y=132)
 //   4=SinkSnd(y=176) 5=Profil(y=220) 6=Exit(y=264)
 static lv_obj_t* Menu_NameLabel(int idx)
@@ -2093,16 +2093,16 @@ static void Menu_LvglSetup()
   lv_obj_set_style_pad_top(objects.item_list,    200, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_pad_bottom(objects.item_list, 200, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_clip_corner(objects.quick_menu_panel, true, LV_PART_MAIN | LV_STATE_DEFAULT);
-  // Corriger le decalage de 3px de Sink Snd. (EEZ le place a y=179 au lieu de y=176)
-  lv_obj_set_y(objects.obj5, 176);   // "Sink Snd." → aligne sur la grille 44px
+  // Fix the 3px offset of Sink Snd. (EEZ places it at y=179 instead of y=176)
+  lv_obj_set_y(objects.obj5, 176);   // "Sink Snd." → aligned to the 44px grid
   lv_obj_set_y(objects.obj6, 176);   // "Mute/Full" → meme ligne
   lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 
-  // --- Arc de volume dans le moyeu central ---
+  // --- Volume arc in the central hub ---
   g_arcVol = lv_arc_create(objects.center_hub);
   lv_obj_set_size(g_arcVol, 180, 180);
   lv_obj_center(g_arcVol);
-  lv_arc_set_rotation(g_arcVol, 135);          // demarre en bas a gauche
+  lv_arc_set_rotation(g_arcVol, 135);          // starts at bottom-left
   lv_arc_set_bg_angles(g_arcVol, 0, 270);      // arc de 270 degres
   lv_arc_set_range(g_arcVol, 0, 20);
   lv_arc_set_value(g_arcVol, g_volume);
@@ -2133,7 +2133,7 @@ static void Menu_Apply()
     return;
   }
 
-  // Valeurs en blanc, jaune sur l'item en edition
+  // Values in white, yellow on the item being edited
   // Ordre visuel EEZ : QNH, Water, Bugs, PilotWt, SinkSnd, Profil
   lv_obj_t* vals[6] = {
     objects.val_qnh,    // 0 = QNH
@@ -2148,7 +2148,7 @@ static void Menu_Apply()
   if (g_menuState == MENU_EDIT && g_menuIndex < 6)
     lv_obj_set_style_text_color(vals[g_menuIndex], lv_color_hex(0xfbd500), LV_PART_MAIN | LV_STATE_DEFAULT);
 
-  // Mise a jour des valeurs
+  // Update the values
   char buf[16];
   snprintf(buf, sizeof(buf), "%d",    g_qnh);    lv_label_set_text(objects.val_qnh,    buf);
   snprintf(buf, sizeof(buf), "%d L",  g_water);  lv_label_set_text(objects.val_water,  buf);
@@ -2160,8 +2160,8 @@ static void Menu_Apply()
 
   lv_obj_clear_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 
-  // Centrage exact de l'item selectionne sur le cadre jaune
-  // Double update_layout : garantit que les coords sont valides apres affichage
+  // Exact centering of the selected item on the yellow frame
+  // Double update_layout: guarantees the coords are valid after display
   lv_obj_update_layout(objects.main);
   lv_area_t fa, la;
   lv_obj_get_coords(objects.selection_frame,     &fa);
@@ -2173,13 +2173,13 @@ static void Menu_Apply()
 }
 
 // Compensation TE par GPS (V0.7) : vario_comp = vario + (V/g)*dV/dt
-//  V = vitesse sol GPS (recue par WiFi). Sans fix -> passthrough.
+//  V = GPS ground speed (received over WiFi). Without a fix -> passthrough.
 static void Comp_Apply()
 {
-  // Mode Condor : g_vario recu du calculateur est deja le evario Condor (deja compense TE
-  // cote sim). Fusionner en plus l'IMU/baro physique du banc (immobile, sans rapport avec
-  // le vol simule) ne fait qu'ajouter du bruit -> aiguille toujours plus grande que Condor.
-  // Bypass complet de la fusion dans ce mode (cf commentaire "effet a cabler" sur g_condorSim).
+  // Condor mode: g_vario from the calculator is already the Condor evario (already TE-compensated
+  // sim side). Additionally fusing the bench's physical IMU/baro (stationary, unrelated to
+  // in the simulated flight) only adds noise -> needle always larger than Condor.
+  // Complete bypass of the fusion in this mode (see "effect to wire" comment on g_condorSim).
   if (g_condorSim) { g_varioComp = isnan(g_vario) ? 0.0f : g_vario; return; }
 
   static uint32_t lastUs = 0;
@@ -2194,8 +2194,8 @@ static void Comp_Apply()
 
   float term = 0.0f;
   if (g_gpsOk) {
-    float v = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;  // air si pitot, sinon vitesse sol GPS
-    vF += (v - vF) * (dt / (0.5f + dt));     // lissage de la vitesse
+    float v = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;  // airspeed if pitot, else GPS ground speed
+    vF += (v - vF) * (dt / (0.5f + dt));     // speed smoothing
     float dVdt = (vF - vPrev) / dt;
     vPrev = vF;
     term = (vF / 9.80665f) * dVdt;           // (V/g)*dV/dt
@@ -2207,9 +2207,9 @@ static void Comp_Apply()
   g_varioComp = base + term;
 }
 
-// Detection spirale / vol droit a partir de la rotation de la route GPS.
-//  - echantillonne le cap a ~1 Hz, calcule la vitesse de rotation (deg/s)
-//  - bascule avec hysteresis temporelle (HOLD_MS) pour eviter le clignotement
+// Spiral / straight-flight detection from the rotation of the GPS track.
+//  - samples the heading at ~1 Hz, computes the rotation rate (deg/s)
+//  - switches with temporal hysteresis (HOLD_MS) to avoid flickering
 //  - sans fix GPS -> vol droit (pas de detection possible)
 static void Circling_Apply()
 {
@@ -2239,7 +2239,7 @@ static void Circling_Apply()
   prevTrack = g_gpsTrack;
   float turnRate = fabsf(d) / (dtMs / 1000.0f);   // deg/s
 
-  // Sens de rotation : signe du delta de cap lisse (cap croissant = droite)
+  // Turn direction: sign of the smoothed heading delta (increasing heading = right)
   static float turnSigned = 0.0f;
   float dps = d / (dtMs / 1000.0f);               // deg/s signe
   turnSigned += (dps - turnSigned) * 0.3f;        // lissage
@@ -2261,14 +2261,14 @@ static void Circling_Apply()
   }
 }
 
-// Estimation du vent par derive GPS en spirale (Lot E). Principe : en spirale coordonnee
-// a vitesse air a peu pres constante, le vecteur vitesse-air balaie les 360 degres de
-// facon a peu pres uniforme sur un tour complet -> sa moyenne vectorielle tend vers zero.
-// Donc moyenne(vitesse SOL) sur un tour complet = vecteur vent (vitesse sol = vitesse air
-// + vent). Echantillonnage 1 Hz (aligne sur Circling_Apply), accumulation vectorielle
-// ponderee par dt, remise a zero a chaque nouveau tour complet (rotation cumulee 360°).
-// Hors spirale : accumulateur remis a zero, derniere estimation conservee pour affichage.
-static float g_windSpeedMs = NAN;  // vitesse du vent estimee (m/s -- derivee de g_gndSpeed en m/s)
+// Wind estimation from GPS drift while circling. Principle: in a coordinated turn at
+// roughly constant airspeed, the air-velocity vector sweeps the 360 degrees fairly
+// uniformly over one full turn -> its vector average tends toward zero.
+// So average(GROUND speed) over one full turn = wind vector (ground speed = airspeed
+// + wind). 1 Hz sampling (aligned with Circling_Apply), dt-weighted vector accumulation,
+// reset on each new full turn (cumulative rotation 360°).
+// Outside a turn: accumulator reset, last estimate kept for display.
+static float g_windSpeedMs = NAN;  // estimated wind speed (m/s -- derived from g_gndSpeed in m/s)
 static float g_windDirDeg   = NAN;  // direction D'OU vient le vent (deg, convention meteo)
 static void Wind_Apply()
 {
@@ -2316,20 +2316,20 @@ static void Wind_Apply()
       if (g_windDirDeg < 0.0f)   g_windDirDeg += 360.0f;
       if (g_windDirDeg >= 360.0f) g_windDirDeg -= 360.0f;
     }
-    sumEast = sumNorth = sumDt = rotAccum = 0.0f;   // reset pour le tour suivant
+    sumEast = sumNorth = sumDt = rotAccum = 0.0f;   // reset for the next turn
   }
 }
 
-// Affiche direction/vitesse du vent (2 labels EEZ) uniquement en vol droit avec un fix
-// GPS et une estimation dispo -- symetrique du Thermal Helper (visible seulement en
-// spirale). Le planeur fixe + la fleche animee (images EEZ a venir) suivront le meme
-// gating une fois construits.
+// Shows wind direction/speed (2 EEZ labels) only in straight flight with a GPS fix and
+// an estimate available -- symmetric to the Thermal Helper (visible only while circling).
+// The fixed glider + animated arrow (EEZ images to come) will follow the same gating
+// once built.
 static void WindDisplay_Update()
 {
-  // Meme principe que le Thermal Helper (symetrique) : affiche des que PAS en spirale,
-  // pas seulement si un fix GPS est present -- sans fix, Circling_Apply force deja
-  // g_circling=false (vol droit par defaut), donc le graphique doit s'afficher tout de
-  // suite (avec un placeholder tant que l'estimation vent n'est pas encore disponible),
+  // Same principle as the Thermal Helper (symmetric): shown as soon as NOT circling,
+  // not only if a GPS fix is present -- without a fix, Circling_Apply already forces
+  // g_circling=false (straight flight by default), so the graphic must show right
+  // next (with a placeholder while the wind estimate is not yet available),
   // pas attendre un fix comme condition supplementaire.
   bool show     = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling;
   bool haveWind = !isnan(g_windSpeedMs) && !isnan(g_windDirDeg);
@@ -2359,11 +2359,11 @@ static void WindDisplay_Update()
   }
   if (objects.img_wind_arrow) {
     if (show) {
-      // Planeur toujours "nez en haut" -> la fleche tourne en relatif par rapport a la
-      // route GPS (meme convention que le Thermal Helper), pas au nord. Sans estimation
-      // encore dispo, reste pointee vers le haut (angle 0) plutot que de disparaitre.
-      // La fleche pointe LA OU LE VENT POUSSE (aval) : g_windDirDeg = direction D'OU vient
-      // le vent -> +180 pour obtenir le sens vers lequel il souffle.
+      // Glider always "nose up" -> the arrow rotates relative to the GPS track (same
+      // convention as the Thermal Helper), not to north. Without an estimate
+      // available yet, stays pointing up (angle 0) rather than disappearing.
+      // The arrow points WHERE THE WIND PUSHES (downwind): g_windDirDeg = direction the wind
+      // COMES FROM -> +180 to get the direction it blows toward.
       float rel = 0.0f;
       if (haveWind) {
         rel = g_windDirDeg + 180.0f - g_gpsTrack;
@@ -2382,8 +2382,8 @@ static void WindDisplay_Update()
   }
 }
 
-// Avg climb : moyenne glissante du vario compense sur 15/20/30 s (echantillon 1 Hz, recalcul
-// ecran). Remplace la valeur vario_int recue du calculateur pour refleter le reglage Avg climb.
+// Avg climb: moving average of the compensated vario over 15/20/30 s (1 Hz sample, recomputed
+// on screen). Replaces the vario_int value from the calculator to reflect the Avg climb setting.
 static void AvgClimb_Apply()
 {
   static float    ring[30] = {0};
@@ -2402,26 +2402,26 @@ static void AvgClimb_Apply()
   g_varioAvg = (win > 0) ? sum / win : 0.0f;
 }
 
-// Temps de vol : chrono depuis le decollage. Decollage = vitesse (air ou sol selon la source
-// g_airspeed) > 40 km/h pendant 3 s ; atterrissage = < 10 km/h pendant 30 s.
-// ATTENTION UNITE : g_airspeed et g_gndSpeed arrivent du calculateur en m/s (cf GpsLink),
-// PAS en km/h -> les seuils sont exprimes en m/s (40 km/h = 11.1 m/s, 10 km/h = 2.78 m/s).
-// Bug historique : seuils laisses a 40/10 "km/h" mais compares a des m/s -> 40 m/s = 144 km/h,
-// jamais atteint en vitesse sol -> decollage jamais detecte -> chrono bloque a 00:00.
+// Flight time: stopwatch since takeoff. Takeoff = speed (airspeed or ground, per the
+// g_airspeed source) > 40 km/h for 3 s; landing = < 10 km/h for 30 s.
+// UNIT WARNING: g_airspeed and g_gndSpeed arrive from the calculator in m/s (see GpsLink),
+// NOT km/h -> the thresholds are expressed in m/s (40 km/h = 11.1 m/s, 10 km/h = 2.78 m/s).
+// Historical bug: thresholds left at 40/10 "km/h" but compared to m/s -> 40 m/s = 144 km/h,
+// never reached in ground speed -> takeoff never detected -> stopwatch stuck at 00:00.
 static void FlightTime_Apply()
 {
   static uint32_t aboveSince = 0, belowSince = 0;
   uint32_t now = millis();
   if (g_condorSim) {
-    // En mode Condor, le calculateur force airspeed/gnd_speed a une constante (30) pour
-    // eviter une double compensation TE cote ecran -> inutilisable pour detecter un
-    // "decollage" ici. On utilise a la place l'etat des donnees Condor recues (g_gpsOk,
-    // actif tant qu'un paquet Condor arrive) comme signal de vol.
+    // In Condor mode, the calculator forces airspeed/gnd_speed to a constant (30) to
+    // avoid double TE compensation on the display side -> unusable to detect a
+    // "takeoff" here. Instead we use the state of the received Condor data (g_gpsOk,
+    // active as long as a Condor packet arrives) as the flight signal.
     if (!g_inFlight && g_gpsOk)       { g_inFlight = true;  g_takeoffMs = now; }
     else if (g_inFlight && !g_gpsOk)  { g_inFlight = false; }
     return;
   }
-  float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // m/s ; air si pitot, sinon sol GPS
+  float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // m/s; airspeed if pitot, else GPS ground
   if (!g_inFlight) {
     if (spd > 11.0f) { if (aboveSince == 0) aboveSince = now;              // 11 m/s ~ 40 km/h
                        if (now - aboveSince >= 3000) { g_inFlight = true; g_takeoffMs = aboveSince; } }
@@ -2433,8 +2433,8 @@ static void FlightTime_Apply()
   }
 }
 
-// Gain d'altitude du thermique courant : remis a 0 a chaque entree en spirale, suit
-// (alt - alt_entree) tant qu'on spirale, fige la derniere valeur en vol droit.
+// Altitude gain of the current thermal: reset to 0 on each entry into a turn, tracks
+// (alt - entry_alt) while circling, freezes the last value in straight flight.
 static void ClimbGain_Apply()
 {
   static bool  prevCirc = false;
@@ -2444,12 +2444,12 @@ static void ClimbGain_Apply()
   prevCirc = g_circling;
 }
 
-// Ajuste une parabole sink(V) = a*V^2 + b*V + c sur les 3 points de la polaire du
-// planeur (V1/Si1, V2/Si2, V3/Si3 : vitesse km/h -> taux de chute m/s, toujours negatif).
-// Interpolation de Lagrange developpee -> coefficients directs (pas de resolution
-// matricielle). V1/V2/V3 sont supposees distinctes (issues de la base planeurs ou du
+// Fits a parabola sink(V) = a*V^2 + b*V + c to the 3 points of the glider's
+// glider (V1/Si1, V2/Si2, V3/Si3: speed km/h -> sink rate m/s, always negative).
+// Expanded Lagrange interpolation -> direct coefficients (no linear-system
+// matrix). V1/V2/V3 are assumed distinct (from the glider database or the
 // menu Glider infos) ; en cas de collision (valeurs egales editees a la main), on
-// retombe sur une polaire plate au 1er point plutot que de propager une division par 0.
+// falls back to a flat polar at the 1st point rather than propagating a division by 0.
 static void Polar_Fit(float* a, float* b, float* c)
 {
   float v1 = g_gliderV1, v2 = g_gliderV2, v3 = g_gliderV3;
@@ -2469,7 +2469,7 @@ static void Polar_Fit(float* a, float* b, float* c)
   *c = s1 * c1 + s2 * c2 + s3 * c3;
 }
 
-// Taux de chute du planeur (m/s, negatif) a la vitesse donnee (km/h), d'apres la polaire.
+// Glider sink rate (m/s, negative) at the given speed (km/h), from the polar.
 static float Polar_Sink(float v_kmh)
 {
   float a, b, c;
@@ -2477,19 +2477,19 @@ static float Polar_Sink(float v_kmh)
   return a * v_kmh * v_kmh + b * v_kmh + c;
 }
 
-// Vario netto : vario TE mesure moins le taux de chute propre du planeur a la vitesse
-// actuelle -> estimation du mouvement vertical de la masse d'air, independant du pilotage.
-// Necessite une vraie vitesse air (MS4525) ; sans pitot -> NAN (affiche "---").
+// Netto vario: measured TE vario minus the glider's own sink rate at the current speed
+// -> estimate of the air mass's vertical movement, independent of piloting.
+// Requires a true airspeed (MS4525); without a pitot -> NAN (shows "---").
 static float g_varioNetto = NAN;
 static void Netto_Apply()
 {
   g_varioNetto = (g_airspeed > 5.0f) ? (g_varioComp - Polar_Sink(g_airspeed)) : NAN;
 }
 
-// Vitesse optimale de croisiere (MacCready) : tangente a la polaire depuis (0,-MC),
-// theorie MacCready classique. Pour sink(V)=aV^2+bV+c, le point de tangence verifie
-// a*V^2 = c + MC (developpement de sink'(V) = (sink(V)+MC)/V). Pas de compensation
-// vent pour l'instant (etape ulterieure, cf estimation vent en spirale).
+// Optimal cruise speed (MacCready): tangent to the polar from (0,-MC), classic MacCready
+// theory. For sink(V)=aV^2+bV+c, the tangency point satisfies a*V^2 = c + MC (expansion
+// of sink'(V) = (sink(V)+MC)/V). No wind compensation for now (later step, see wind
+// estimation while circling).
 static float g_stfSpeed = NAN;
 static void STF_Apply()
 {
@@ -2502,32 +2502,32 @@ static void STF_Apply()
 }
 
 #if SIM_THERMAL
-// Simulation de banc : faux planeur spiralant (droite) dans un thermique decentre.
+// Bench simulation: fake glider circling (right) in an off-center thermal.
 // Injecte track/vario synthetiques -> thermal helper visible sans GPS ni vol.
-// Le decentrage oscille (0..50 m) pour montrer le passage centre <-> decale.
+// The off-center offset oscillates (0..50 m) to show the centered <-> offset transition.
 static void Sim_Thermal_Step()
 {
   static uint32_t t0 = 0;
   if (t0 == 0) t0 = millis();
   float t = (millis() - t0) * 0.001f;
 
-  const int   dir    = +1;       // spirale droite -> planeur a gauche
+  const int   dir    = +1;       // right turn -> glider on the left
   const float period = 10.0f;    // 1 tour en 10 s
   const float circR  = 45.0f, Rt = 60.0f, Wmax = 3.5f;
   float offset = 25.0f + 25.0f * sinf(t * (2.0f * PI / 24.0f));  // 0..50 m
 
   float adot = -dir * (2.0f * PI / period);
-  float a    = adot * t;     // meme angle pour position ET vitesse (coherent)
+  float a    = adot * t;     // same angle for position AND velocity (consistent)
   float gx = offset + circR * cosf(a);
   float gy = circR * sinf(a);
   float d  = sqrtf(gx * gx + gy * gy);
   float x  = d / Rt;
-  // Thermique realiste : pompe au centre + ANNEAU DE DESCENTE autour (le sink varie,
-  // de ~0 loin a ~-2.3 m/s dans l'anneau) -> les points bleus auront des tailles variees.
+  // Realistic thermal: lift at the center + SINK RING around it (sink varies, from ~0
+  // far away to ~-2.3 m/s in the ring) -> the blue dots will have varied sizes.
   float vario = Wmax * expf(-x * x) - 2.5f * expf(-1.2f * (x - 1.7f) * (x - 1.7f));
 
-  // Banc : l'aiguille et les labels refletent AUSSI ce vario SIM -> coherence visuelle
-  // (sinon l'aiguille montre le bruit IMU et contredit le helper).
+  // Bench: the needle and labels ALSO reflect this SIM vario -> visual consistency
+  // (otherwise the needle shows IMU noise and contradicts the helper).
   g_varioComp = vario;
 
   float vx = -sinf(a) * adot, vy = cosf(a) * adot;
@@ -2541,21 +2541,21 @@ static void Sim_Thermal_Step()
 
 static void Needles_Apply()
 {
-  // Throttle ~15 Hz (cale sur le vsync ~58 Hz) : evite de redessiner
-  // l'aiguille du grand cadran a chaque tour de loop (jitter IMU).
+  // Throttle ~15 Hz (aligned to the ~58 Hz vsync): avoids redrawing the large gauge
+  // needle on every loop iteration (IMU jitter).
   static uint32_t last = 0;
   uint32_t now = millis();
   if ((now - last) < 50) return;   // ~20 Hz
   last = now;
 
-  // Deadband : ne met a jour que si la valeur affichee change d'au moins 0.1 m/s
-  // (evite que l'aiguille - et donc le redessin du cadran - s'agite dans le bruit IMU)
+  // Deadband: only update if the displayed value changes by at least 0.1 m/s
+  // (avoids the needle - and thus the gauge redraw - jittering in IMU noise)
   static int lastV = -1000000, lastVi = -1000000;
-  // isnan() seul ne filtre pas +/-Infinity (ex: transitoire de boot avant convergence
-  // du filtre) : caster une valeur infinie en int est un comportement indefini en C,
-  // observe au boot du 2 juillet 2026 (fus=+201.30 -> aiguille hors cadran -> freeze
-  // ~2s plus tard). isfinite() + clamp a une plage realiste (planeur : +/-15 m/s).
-  float v  = isfinite(g_varioComp) ? g_varioComp : 0.0f;  // aiguille = vario compense GPS
+  // isnan() alone does not filter +/-Infinity (e.g. a boot transient before the filter
+  // converges): casting an infinite value to int is undefined behavior in C, observed at
+  // boot on 2 July 2026 (fus=+201.30 -> needle off the gauge -> freeze ~2s later).
+  // isfinite() + clamp to a realistic range (glider: +/-15 m/s).
+  float v  = isfinite(g_varioComp) ? g_varioComp : 0.0f;  // needle = GPS-compensated vario
   float vi = isfinite(g_varioAvg)  ? g_varioAvg  : 0.0f;
   if (v  >  15.0f) v  =  15.0f; else if (v  < -15.0f) v  = -15.0f;
   if (vi >  15.0f) vi =  15.0f; else if (vi < -15.0f) vi = -15.0f;
@@ -2571,13 +2571,13 @@ static void Needles_Apply()
   }
 }
 
-// Arc de volume : visible pendant VOL_HIDE_MS apres le dernier changement
+// Volume arc: visible for VOL_HIDE_MS after the last change
 static void Sound_Init()
 {
   // Buzzer interne Waveshare = EXIO_PIN8 via TCA9554 (I2C)
-  // Desactive : le son est desormais gere par le module PAM8403 sur le Calculateur.
+  // Disabled: the sound is now handled by the PAM8403 module on the calculator.
   Set_EXIO(EXIO_PIN8, Low);  // silence permanent
-  // Envoyer l'etat initial sink sound au Calculateur (Mute par defaut)
+  // Send the initial sink sound state to the calculator (Mute by default)
   LIM_CMD_SEND(Serial1, 0x00);
 }
 
@@ -2617,11 +2617,11 @@ static void Sound_Apply()
     return;
   }
 
-  // --- Montee : cadence de bip qui augmente avec le vario ---
+  // --- Lift: beep cadence that increases with the vario ---
   float t = (v - VARIO_DEAD_HIGH) / (VARIO_VMAX - VARIO_DEAD_HIGH);
   t = fminf(1.0f, fmaxf(0.0f, t));
 
-  // Periode totale du bip : 1200ms (faible montee) → 120ms (forte montee)
+  // Total beep period: 1200ms (weak lift) → 120ms (strong lift)
   uint32_t period = (uint32_t)(VARIO_PERIOD_SLOW - t * (VARIO_PERIOD_SLOW - VARIO_PERIOD_FAST));
   uint32_t onMs   = (uint32_t)(period * VARIO_DUTY_ON);   // duree du bip
   uint32_t offMs  = period - onMs;                         // duree du silence
@@ -2666,29 +2666,29 @@ static void MC_Apply()
                                  (int32_t)g_mcTenths * 100);
 }
 
-// Cree/positionne une fois les labels Info Boxes (appele depuis setup(), AVANT le
-// premier rendu). Les 5 labels sont desormais de vrais objets EEZ, positionnes/stylees
+// Creates/positions the Info Box labels once (called from setup(), BEFORE the
+// first render). The 5 labels are now real EEZ objects, positioned/styled
 // dans infobox_display_container (2 juillet 2026, remplace l'ancien systeme a 3 box
-// EEZ + zone 1 desactivee suite aux gels intermittents). Zone 2 = reservee au futur
-// graphique centre (thermal helper/vent), zone 5 reste inutilisee (pas de label EEZ).
+// in EEZ + zone 1 disabled after the intermittent freezes). Zone 2 = reserved for the future
+// center graphic (thermal helper/wind), zone 5 stays unused (no EEZ label).
 static void Labels_Init()
 {
   if (s_ibLabels[0] != NULL || !objects.lbl_ib_haut_sup) return;
   s_ibLabels[0] = objects.lbl_ib_haut_sup;
   s_ibLabels[1] = objects.lbl_ib_haut_inf;
-  s_ibLabels[2] = objects.lbl_ib_bas_cent;   // reserve : toujours IB_EMPTY (g_infoBoxConfig[2])
+  s_ibLabels[2] = objects.lbl_ib_bas_cent;   // reserved: always IB_EMPTY (g_infoBoxConfig[2])
   s_ibLabels[3] = objects.lbl_ib_bas_sup;
   s_ibLabels[4] = objects.lbl_ib_bas_inf;
 }
 
-// Mise a jour des labels numeriques (altitude, vario, vario integre)
-// Maj uniquement quand la valeur change (evite des redraws inutiles)
-// Mise a jour des labels numeriques Info Boxes (4 zones sur le cadran)
-// Position Y (haut du label) de chaque zone dans infobox_display_container, telle que
-// posee par Mael dans EEZ. Le label est en LV_SIZE_CONTENT (largeur = texte) avec un X
-// fixe -> sans recentrage, le bord GAUCHE reste fixe et le texte semble se decaler selon
-// sa longueur. On recentre donc horizontalement (LV_ALIGN_TOP_MID) a chaque changement
-// de texte, comme le fait deja InfoBox_RenderSelect pour les labels de l'editeur.
+// Update the numeric labels (altitude, vario, integrated vario).
+// Update only when the value changes (avoids useless redraws).
+// Update the numeric Info-Box labels (4 zones on the gauge).
+// Y position (top of the label) of each zone in infobox_display_container, as placed in
+// EEZ. The label is LV_SIZE_CONTENT (width = text) with a fixed X -> without re-centering,
+// the LEFT edge stays fixed and the text seems to shift with its length. So we re-center
+// it horizontally (LV_ALIGN_TOP_MID) on every text change, as InfoBox_RenderSelect already
+// does for the editor labels.
 static const lv_coord_t IB_LABEL_Y[6] = { 84, 113, 228, 338, 374, 0 };
 
 static void Labels_Apply()
@@ -2772,7 +2772,7 @@ static void Labels_Apply()
         break;
       }
       case IB_GLIDE: {
-        float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // m/s ; air si pitot, sinon sol
+        float spd = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;   // m/s; airspeed if pitot, else ground
         if (spd > 5.5f && g_varioFused < -0.1f) {                    // 5.5 m/s ~ 20 km/h
           float ld = spd / (-g_varioFused);   // deja m/s / m/s -> ratio (etait /3.6 = bug km/h)
           if (ld > 199.0f) ld = 199.0f;
@@ -2817,7 +2817,7 @@ static void Labels_Apply()
     lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
   }
 
-  // Indicateur GPS : image connecte / waiting selon le fix recu du calculateur
+  // GPS indicator: connected / waiting image depending on the fix received from the calculator
   if (objects.img_gps) {
     static int lastGps = -1;
     int g = g_gpsOk ? 1 : 0;
@@ -2882,7 +2882,7 @@ void Driver_Loop(void *parameter)
   uint8_t  slow    = 0;
   uint32_t lastPkt = 0;
   while (1) {
-    QMI8658_Loop();                 // IMU ~50 Hz (accel + gyro pour la fusion)
+    QMI8658_Loop();                 // IMU ~50 Hz (accel + gyro for the fusion)
 
     // Fusion vario (AHRS + Kalman) : cadence reguliere, core 0
     uint32_t pkts   = g_pktCount;
@@ -2893,7 +2893,7 @@ void Driver_Loop(void *parameter)
                                     g_pressure, newBaro, g_vario);
 
     // Filtre vario utilisateur (menu Vario > Vario filter : Fast/Med/Slow) : lissage EMA
-    // du vario fusionne. Affecte l'aiguille (via g_varioComp) ET le son (via g_varioFused).
+    // of the fused vario. Affects the needle (via g_varioComp) AND the sound (via g_varioFused).
     {
       static uint32_t lastF = 0;
       uint32_t nf  = micros();
@@ -2936,38 +2936,38 @@ void setup()
   delay(400);
   Serial.println("\n=== L!M Vario boot ===");
 
-  // Watchdog explicite (2 juillet 2026) : aucun panic watchdog jamais observe malgre
-  // des gels totaux -> signe d'une attente BLOQUANTE (semaphore/mutex/registre materiel
-  // jamais libere) plutot qu'une boucle qui consomme le CPU (qui aurait fini par
-  // affamer la tache idle et declencher le watchdog par defaut). On enregistre nous-memes
-  // la tache loop() ET Driver_Loop pour forcer un panic + backtrace au prochain gel.
+  // Explicit watchdog (2 July 2026): no watchdog panic was ever observed despite total
+  // freezes -> sign of a BLOCKING wait (semaphore/mutex/hardware register never released)
+  // rather than a CPU-hogging loop (which would eventually starve the idle task and trip
+  // the default watchdog). We register the loop() task AND Driver_Loop ourselves to force
+  // a panic + backtrace on the next freeze.
   esp_task_wdt_config_t twdt_config = {
     .timeout_ms = 6000,
     .idle_core_mask = (1 << 0) | (1 << 1),
     .trigger_panic = true,
   };
   esp_task_wdt_reconfigure(&twdt_config);
-  esp_task_wdt_add(NULL);   // tache loop() (setup() tourne sur la meme tache)
+  esp_task_wdt_add(NULL);   // loop() task (setup() runs on the same task)
 
   Config_Load();
 
-  // Wireless_Test2() retire (2 juillet 2026) : demo constructeur (scan WiFi + Bluetooth)
-  // sans aucun usage fonctionnel dans le vario. Le scan BLE ne liberait jamais
-  // completement sa RAM interne apres BLEDevice::deinit() (bug connu lib Arduino BLE),
-  // laissant ~5 Ko de heap interne libre en permanence -> gels aleatoires des que
-  // n'importe quelle allocation un peu grosse (menu, liste, fichier SD) tombait sur le mur.
+  // Wireless_Test2() removed (2 July 2026): vendor demo (WiFi + Bluetooth scan) with no
+  // functional use in the vario. The BLE scan never fully freed its internal RAM after
+  // BLEDevice::deinit() (known Arduino BLE lib bug), leaving ~5 KB of internal heap free
+  // permanently -> random freezes whenever any largish allocation (menu, list, SD file)
+  // hit the wall.
   Serial.println(">> Driver_Init");    Driver_Init();
   Serial.println(">> LCD_Init");       LCD_Init();
   Serial.println(">> SD_Init");        SD_Init();
   Serial.println(">> GliderDB_LoadSD"); GliderDB_LoadSD();
   Serial.println(">> FlightLog_Init"); FlightLog_Init();
   Serial.println(">> Lvgl_Init");      Lvgl_Init();
-  Serial.println(">> ui_init");        ui_init();   // EEZ cree les ecrans (splash + main)
-  // Fond de l'ecran principal aligne sur la couleur du center_hub (0x1f333e) : l'image de
-  // fond du cadran (TRUE_COLOR_ALPHA) a des zones semi-transparentes qui, composees sur le
-  // noir par defaut, paraissaient plus foncees que le hub opaque -> difference visible en
-  // RGB565 (invisible dans EEZ). Compose sur 0x1f333e, ces zones rendent exactement la meme
-  // couleur que le hub. (EEZ regenere screens.c en 0x000000 -> on force ici a chaque boot.)
+  Serial.println(">> ui_init");        ui_init();   // EEZ creates the screens (splash + main)
+  // Main screen background aligned to the center_hub color (0x1f333e): the gauge background
+  // image (TRUE_COLOR_ALPHA) has semi-transparent areas that, composited on the default
+  // black, looked darker than the opaque hub -> visible difference in RGB565 (invisible in
+  // EEZ). Composited on 0x1f333e, those areas render exactly the same color as the hub.
+  // (EEZ regenerates screens.c with 0x000000 -> we force it here on every boot.)
   lv_obj_set_style_bg_color(objects.main, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
 
   Serial.println(">> Menu_LvglSetup"); Menu_LvglSetup();
@@ -2977,26 +2977,26 @@ void setup()
   Serial.println(">> Link_Init");      Link_Init();
   Serial.println(">> Sound_Init");     Sound_Init();
 
-  // --- Ecran de chargement (page Splash concue dans EEZ) ---
-  // Reste affiche tant que la liaison calculateur n'est pas etablie
-  // (les vraies trames vario arrivent), avec un temps mini pour voir le
-  // logo et un timeout de securite. Bascule INSTANTANEE vers Main.
+  // --- Loading screen (Splash page designed in EEZ) ---
+  // Stays shown until the calculator link is established
+  // (the real vario frames arrive), with a minimum time to see the
+  // logo and a safety timeout. INSTANT switch to Main.
   lv_scr_load(objects.splash);
   const uint32_t SPLASH_MIN_MS = 4000;    // logo visible au moins 4 s
-  const uint32_t SPLASH_MAX_MS = 15000;   // securite : ne jamais rester bloque
+  const uint32_t SPLASH_MAX_MS = 15000;   // safety: never stay stuck
   uint32_t splashT0 = millis();
   while (millis() - splashT0 < SPLASH_MAX_MS) {
     lv_timer_handler();
-    Link_Poll();                          // recoit les trames -> met a jour g_linkOk
+    Link_Poll();                          // receives the frames -> updates g_linkOk
     if (g_linkOk && (millis() - splashT0 >= SPLASH_MIN_MS)) break;
 #if SIM_THERMAL
     if (millis() - splashT0 >= SPLASH_MIN_MS) break;   // banc : pas d'attente liaison
 #endif
-    esp_task_wdt_reset();   // boucle longue (jusqu'a 15s) -> nourrir le watchdog explicite
+    esp_task_wdt_reset();   // long loop (up to 15s) -> feed the explicit watchdog
     delay(5);
   }
   if (!g_linkOk) {
-    FlightLog_AddError("BOOT", "Démarrage : trames calculateur non détectées après 15s");
+    FlightLog_AddError("BOOT", "Startup: calculator frames not detected after 15s");
   }
   lv_scr_load(objects.main);              // instantane (aucune animation)
 
@@ -3005,7 +3005,7 @@ void setup()
 
 void loop()
 {
-  bool ibgd = g_ibJustRendered;   // breadcrumb Lvgl_Loop uniquement juste apres un rendu IB
+  bool ibgd = g_ibJustRendered;   // Lvgl_Loop breadcrumb only right after an IB render
   if (ibgd) {
     IBDBG("[IB] before Lvgl_Loop heap=%u minHeap=%u maxAlloc=%u psram=%u maxAllocPsram=%u\n",
           (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
@@ -3017,23 +3017,23 @@ void loop()
   Lvgl_Loop();
   if (ibgd) IBDBG("[IB] after Lvgl_Loop\n");
   Link_Poll();
-  // Envoi unique de la config son (pitch/forme/spread) au calculateur ~2s apres le boot,
-  // quand le calculateur est pret a recevoir -> le son adopte les defauts du menu.
+  // One-time send of the sound config (pitch/waveform/spread) to the calculator ~2s after boot,
+  // when the calculator is ready to receive -> the sound adopts the menu defaults.
   static bool s_soundCfgSent = false;
   if (!s_soundCfgSent && millis() > 2000) { SoundCfg_Send(); s_soundCfgSent = true; }
   Comp_Apply();     // compensation TE GPS (vitesse recue du calculateur) -> g_varioComp
   Circling_Apply(); // detection spirale / vol droit -> g_circling + g_turnDir
   Wind_Apply();      // estimation vent (derive GPS en spirale) -> g_windSpeedMs/g_windDirDeg
-  // Bascule auto des info-boxes affichees entre le profil Climb et Cruise, sauf pendant
-  // l'edition de l'un des deux profils dans le menu (g_infoBoxConfig pointe alors
-  // volontairement sur celui choisi -> ne pas l'ecraser depuis ici).
+  // Auto-switch the displayed info-boxes between the Climb and Cruise profile, except
+  // while editing one of the two profiles in the menu (g_infoBoxConfig then deliberately
+  // points to the chosen one -> do not overwrite it from here).
   if (g_ibEditState == IBEDIT_NONE) {
     g_infoBoxConfig = g_circling ? g_ibConfigClimb : g_ibConfigCruise;
   }
-  AvgClimb_Apply();  // moyenne glissante du vario (Avg climb) -> g_varioAvg
-  FlightTime_Apply();// detection decollage / atterrissage -> g_takeoffMs / g_inFlight
-  ClimbGain_Apply(); // gain d'altitude du thermique courant -> g_climbGain
-  Netto_Apply();     // vario compense de la polaire -> g_varioNetto
+  AvgClimb_Apply();  // moving average of the vario (Avg climb) -> g_varioAvg
+  FlightTime_Apply();// takeoff / landing detection -> g_takeoffMs / g_inFlight
+  ClimbGain_Apply(); // altitude gain of the current thermal -> g_climbGain
+  Netto_Apply();     // polar-compensated vario -> g_varioNetto
   STF_Apply();       // vitesse optimale MacCready (polaire) -> g_stfSpeed
 #if SIM_THERMAL
   Sim_Thermal_Step();   // banc : injecte un faux thermique (SIM_THERMAL=1)
@@ -3042,10 +3042,10 @@ void loop()
   ThermalDraw_Update((g_menuState == MENU_CLOSED) && !g_setupOpen && g_circling && g_helperEnable, g_turnDir, g_gpsTrack);
   WindDisplay_Update();
 #endif
-  if (!g_setupOpen) {            // quand le setup est ouvert : on ne dessine plus le vario derriere
+  if (!g_setupOpen) {            // when the setup is open: we no longer draw the vario behind
     Needles_Apply();
     Labels_Apply();
-    // Sound_Apply() supprime : son desormais gere par le PAM8403 sur le Calculateur
+    // Sound_Apply() removed: sound now handled by the PAM8403 on the calculator
     Vol_Apply();   // arc volume temporaire (encodeur 2)
     MC_Apply();
   }
@@ -3054,12 +3054,12 @@ void loop()
   SetupMenu_Apply();   // rend le setup menu (appui long ENC1)
 
   // Journal de vol (10 Hz) + serveur WiFi de recuperation
-  // Test bisection du 2 juillet 2026 : desactive temporairement, gel toujours present
+  // Bisection test 2 July 2026: temporarily disabled, freeze still present
   // -> SD/FlightLog innocente, cause = timeout I2C manquant (cf I2C_Driver.cpp). Reactive.
   FlightLog_Tick(g_pressure, g_altitude, g_vario, g_varioFused,
                  VarioFusion_GetVertAccel(), g_volume);
   FlightLog_ServerLoop();
-  QrScreen_Tick();   // ouvre/ferme l'ecran QR selon l'etat "App connect"
+  QrScreen_Tick();   // opens/closes the QR screen per the "App connect" state
 
   // --- Rapport perf (instrumentation LVGL_Driver) ---
   {

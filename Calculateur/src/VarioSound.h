@@ -37,7 +37,7 @@ private:
     float _thresholdClimb = 0.2f;
     float _thresholdSink = -0.5f;
 
-    // Larus tone generation algorithm parameters
+    // Tone generation algorithm parameters
     float _sndCenterFreq = 500.0f;
     float _sndExpMul = 0.138629f;
 

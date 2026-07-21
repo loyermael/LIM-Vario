@@ -55,11 +55,11 @@ The project is fully open (GPL-3.0) and designed to be reproducible from off-the
 - Analog needle, MacCready arrow and integrated-climb arrow on a round gauge.
 - **Configurable info-boxes** across the gauge (instant/average vario, MacCready, baro/GPS altitude, IAS, ground speed, wind, glide ratio, climb gain, flight time, alerts, mode…).
 - **Status pod** with live WiFi, GPS and battery indicators.
-- **Dynamic center**: thermal assistant (Larus-style lift ring) in a turn, wind vector in cruise.
+- **Dynamic center**: thermal assistant (lift-distribution ring) in a turn, wind vector in cruise.
 - **Dual flight profiles** (Climb / Cruise) with independent, NVS-persistent layouts.
 
 **Acoustic variometer**
-- Larus-style tone cadence with configurable pitch, waveform, spread, sink alarm and volume.
+- Responsive vario tone cadence with configurable pitch, waveform, spread, sink alarm and volume.
 
 **Automatic flight logging**
 - Takeoff/landing detection writes 10 Hz CSV telemetry to SD (`VOL_<date>_<time>.csv`), including a 30 s pre-takeoff buffer.
@@ -72,14 +72,16 @@ The project is fully open (GPL-3.0) and designed to be reproducible from off-the
 A dual-microcontroller design guarantees a responsive UI without sensor latency or radio stalls:
 
 ```
-┌─── Calculator Unit (ESP32) ──────────────┐         ┌─── Display Unit (ESP32-S3 2.1") ─────────┐
-│ • BMP388 static pressure (altitude/vario)│         │ • 480×480 round IPS touchscreen (ST7701) │
-│ • MS4525DO differential pressure (IAS/TE) │  UART   │ • QMI8658 IMU (accel + gyro)             │
-│ • 2× EC11 encoders + I2S audio            │ ──────► │ • Mahony AHRS + Kalman sensor fusion     │
-│ • GPS (10 Hz) + FLARM traffic             │ 115200  │ • LVGL 8.4 UI + configurable info-boxes  │
-│ • SD flight logger + WiFi companion AP    │ ◄────── │ • Roller menus + dual flight profiles    │
-└───────────────────────────────────────────┘         └──────────────────────────────────────────┘
+┌─── Calculator Unit (ESP32) ──────────────┐         ┌─── Display Unit (ESP32-S3 2.1") ──────────┐
+│ • BMP388 static pressure (altitude/vario)│         │ • 480×480 round IPS touchscreen (ST7701)  │
+│ • MS4525DO differential pressure (IAS/TE) │  UART   │ • QMI8658 IMU (accel + gyro)              │
+│ • 2× EC11 encoders + I2S audio            │ ──────► │ • Mahony AHRS + Kalman sensor fusion      │
+│ • GPS (10 Hz) + FLARM traffic             │ 115200  │ • onboard microSD flight logger           │
+│ • GPS-reception WiFi bridge               │ ◄────── │ • LVGL UI + WiFi companion app + profiles │
+└───────────────────────────────────────────┘         └───────────────────────────────────────────┘
 ```
+
+Barometric sampling, audio, GPS and the encoders live on the **calculator**; the **display unit** carries the IMU, the SD card slot (onboard the Waveshare board), the inertial fusion, the UI and the WiFi companion app.
 
 The two units exchange binary packets (`lim_link` protocol, `Shared/lim_link.h`) protected by CRC validation.
 
@@ -98,13 +100,13 @@ Enabling **App connect** turns the calculator into a WiFi access point (`LIM-Var
 | Component | Description | Role |
 | :--- | :--- | :--- |
 | **Waveshare ESP32-S3-Touch-LCD-2.1** | 2.1″ round 480×480 IPS display | Display unit, UI, AHRS fusion, QMI8658 IMU |
-| **ESP32 (DevKit / WROOM-32D)** | Classic ESP32 | Calculator: sensors, encoders, audio, GPS, logging |
+| **ESP32 (DevKit / WROOM-32D)** | Classic ESP32 | Calculator: sensors, encoders, audio, GPS |
 | **BMP388** | High-precision barometric sensor | Static pressure → altitude & raw vario |
 | **MS4525DO** *(optional)* | Differential pressure sensor | Dynamic pressure → IAS & TE compensation |
 | **2× EC11** | Rotary encoders with push-button | Navigation / MacCready · Volume / mode |
 | **MAX98357A + speaker** | I2S class-D amplifier | Acoustic vario output |
 | **GPS module (u-blox M10, 10 Hz)** | GNSS receiver | Position for wind & track |
-| **MicroSD** | SPI/SDMMC card | Autonomous CSV flight logging |
+| **MicroSD** | Onboard slot on the display board | Autonomous CSV flight logging |
 
 > A complete integrated-unit schematic (power, I2C, audio, encoders, dual-GPS) and a bench power-up test procedure are maintained alongside the project.
 

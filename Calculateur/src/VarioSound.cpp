@@ -138,7 +138,7 @@ void VarioSound::setCenterFreq(float hz) {
     if (hz > 1500.0f) hz = 1500.0f;
     _sndCenterFreq = hz;
 }
-// spread 0..10 -> _sndExpMul. 5 = standard Larus value (0.138629), 0 = fixed frequency.
+// spread 0..10 -> _sndExpMul. 5 = reference value (0.138629), 0 = fixed frequency.
 void VarioSound::setSpread(uint8_t s) {
     if (s > 10) s = 10;
     _sndExpMul = (float)s * (0.138629f / 5.0f);

@@ -36,7 +36,7 @@
 #define ENC2_SW   14
 
 // SPEAKER TEST: when BMP sensor is missing, injects synthetic vertical velocity
-// to verify acoustic tone generation (Larus cadence). 0 = off (avoids overriding Condor/real vario).
+// to verify acoustic tone generation. 0 = off (avoids overriding Condor/real vario).
 #define SOUND_TEST 0
 
 // Encoder rotation inversion: 1 = inverted direction

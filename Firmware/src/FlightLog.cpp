@@ -18,6 +18,7 @@
 #include <Update.h>
 #include "esp_netif.h"   // captive portal: offer 192.168.4.1 as DNS via DHCP
 #include "esp_heap_caps.h"  // internal-RAM diag before/after softAP
+#include "esp_attr.h"       // RTC_NOINIT_ATTR (survives watchdog/brownout reset, not full power-cycle)
 #include "RTC_PCF85063.h"
 #include "CompanionApp_HTML.h"
 
@@ -83,10 +84,20 @@ extern uint8_t g_centerConfigCruise;
 #define AP_PASS        "limvario"
 
 // Flight detection
-#define TAKEOFF_DELTA_M   15.0f   // altitude deviation => takeoff
-#define LANDED_BAND_M      8.0f   // "still" altitude band
+#define TAKEOFF_DELTA_M     15.0f    // altitude deviation => takeoff candidate
+#define TAKEOFF_CONFIRM_MS 4000UL    // deviation must hold this long before we actually open a file
+                                     // (rejects single-sample baro/GPS glitches and ground handling bumps)
+#define LANDED_BAND_M        8.0f   // "still" altitude band
 #define LANDED_HOLD_MS  180000UL  // 3 min stable => landed
 #define GROUND_TAU_S      30.0f   // ground reference smoothing
+
+// Survives watchdog / brownout resets (not a full power cycle) -- lets us
+// resume logging into the SAME file instead of starting a new one when the
+// board reboots mid-flight.
+#define RTC_LOG_MAGIC 0x4C494D31UL   // 'LIM1'
+RTC_NOINIT_ATTR static uint32_t rtc_magic;
+RTC_NOINIT_ATTR static bool     rtc_flying;
+RTC_NOINIT_ATTR static char     rtc_path[64];
 
 // Pre-takeoff buffer: 30 s at 10 Hz
 #define PREBUF_LINES   300
@@ -105,6 +116,7 @@ static DNSServer  g_dnsServer;   // captive portal: resolves every domain to the
 static float    g_groundRef   = NAN;   // ground reference altitude
 static float    g_anchorAlt   = NAN;   // stability anchor (in flight)
 static uint32_t g_anchorMs    = 0;
+static uint32_t g_takeoffCandMs = 0;   // 0 = no takeoff candidate in progress
 
 // pre-takeoff ring buffer
 // Pre-takeoff ring buffer (300 lines): ~28 KB placed in PSRAM and NOT in
@@ -122,12 +134,15 @@ static void file_open_new(void)
   PCF85063_Read_Time(&t);
   char path[64];
   if (t.year >= 2020 && t.year <= 2099) {
-    snprintf(path, sizeof(path), LOG_DIR "/VOL_%04d%02d%02d_%02d%02d.csv",
-             t.year, t.month, t.day, t.hour, t.minute);
+    // Second-resolution timestamp: avoids the old minute-only name colliding
+    // (and falling back to a _1/_2 suffix) if a flicker or reset re-triggers
+    // a "takeoff" within the same clock minute.
+    snprintf(path, sizeof(path), LOG_DIR "/VOL_%04d%02d%02d_%02d%02d%02d.csv",
+             t.year, t.month, t.day, t.hour, t.minute, t.second);
     int n = 1;
     while (SD_MMC.exists(path) && n < 100)
-      snprintf(path, sizeof(path), LOG_DIR "/VOL_%04d%02d%02d_%02d%02d_%d.csv",
-               t.year, t.month, t.day, t.hour, t.minute, n++);
+      snprintf(path, sizeof(path), LOG_DIR "/VOL_%04d%02d%02d_%02d%02d%02d_%d.csv",
+               t.year, t.month, t.day, t.hour, t.minute, t.second, n++);
   } else {
     int n = 0;
     do { snprintf(path, sizeof(path), LOG_DIR "/VOL_%04d.csv", n++); }
@@ -146,12 +161,22 @@ static void file_open_new(void)
     }
   }
   g_preCount = 0;
+
+  // Remember this file in RTC memory so a watchdog/brownout reset mid-flight
+  // resumes into it instead of starting a brand-new one (see FlightLog_Init).
+  strncpy(rtc_path, path, sizeof(rtc_path) - 1);
+  rtc_path[sizeof(rtc_path) - 1] = '\0';
+  rtc_flying = true;
+  rtc_magic  = RTC_LOG_MAGIC;
+
   Serial.printf("[log] TAKEOFF -> %s\n", path);
 }
 
 static void file_close(void)
 {
   if (g_file) { g_file.flush(); g_file.close(); }
+  rtc_flying = false;
+  rtc_magic  = RTC_LOG_MAGIC;
   Serial.println("[log] LANDING: file closed");
 }
 
@@ -159,7 +184,6 @@ void FlightLog_Init(void)
 {
   g_sdOk = (SD_MMC.cardType() != CARD_NONE);
   if (!g_sdOk) Serial.println("[log] no SD card: logging disabled");
-  else         Serial.println("[log] ready (waiting for takeoff)");
 
   // Pre-takeoff buffer in PSRAM (frees ~28 KB of internal RAM for WiFi).
   g_pre = (char (*)[LINE_MAX])heap_caps_malloc((size_t)PREBUF_LINES * LINE_MAX,
@@ -168,6 +192,32 @@ void FlightLog_Init(void)
     // Fallback to internal RAM if no PSRAM (should not happen on N16R8).
     g_pre = (char (*)[LINE_MAX])malloc((size_t)PREBUF_LINES * LINE_MAX);
     Serial.println("[log] WARNING: pre-takeoff buffer in internal RAM (PSRAM failed)");
+  }
+
+  // RTC_NOINIT_ATTR memory survives a watchdog/brownout/software reset but is
+  // garbage on a true power-on (cold boot, USB unplugged, fresh flash). If we
+  // find our own magic + "was flying" marker, this is a reboot that happened
+  // DURING a flight -> resume logging into the SAME file (append) instead of
+  // opening a new one, so one crash/reset doesn't split the flight in two.
+  bool resumed = false;
+  if (g_sdOk && rtc_magic == RTC_LOG_MAGIC && rtc_flying && rtc_path[0]) {
+    g_file = SD_MMC.open(rtc_path, FILE_APPEND);
+    if (g_file) {
+      g_file.printf("# RESUME after reset, ms=%lu\n", (unsigned long)millis());
+      g_flying    = true;
+      g_anchorAlt = NAN;          // re-arm the landing detector cleanly
+      g_anchorMs  = millis();
+      g_lastFlush = millis();
+      resumed = true;
+      Serial.printf("[log] RESUMED after reset -> %s\n", rtc_path);
+    } else {
+      Serial.printf("[log] resume FAILED for %s (next takeoff starts a new file)\n", rtc_path);
+    }
+  }
+  rtc_magic = RTC_LOG_MAGIC;
+  if (!resumed) {
+    rtc_flying = false;
+    if (g_sdOk) Serial.println("[log] ready (waiting for takeoff)");
   }
 }
 
@@ -226,10 +276,20 @@ void FlightLog_Tick(float p_pa, float alt_m, float varioBaro,
     g_groundRef += (alt_m - g_groundRef) * (dt / (GROUND_TAU_S + dt));
 
     if (fabsf(alt_m - g_groundRef) > TAKEOFF_DELTA_M) {
-      g_flying  = true;
-      file_open_new();
-      g_anchorAlt = alt_m;
-      g_anchorMs  = now;
+      // Deviation candidate: must hold for TAKEOFF_CONFIRM_MS before we treat
+      // it as a real takeoff. A single noisy sample (baro glitch, gust, glider
+      // being handled/hooked up) used to open a brand-new file instantly;
+      // now it has to persist a few seconds first.
+      if (g_takeoffCandMs == 0) g_takeoffCandMs = now;
+      if (now - g_takeoffCandMs >= TAKEOFF_CONFIRM_MS) {
+        g_flying  = true;
+        file_open_new();
+        g_anchorAlt = alt_m;
+        g_anchorMs  = now;
+        g_takeoffCandMs = 0;
+      }
+    } else {
+      g_takeoffCandMs = 0;   // deviation didn't hold: false alarm
     }
   } else {
     // ---- EN VOL : ecriture + detection atterrissage ----
@@ -245,9 +305,10 @@ void FlightLog_Tick(float p_pa, float alt_m, float varioBaro,
       g_anchorMs  = now;
     } else if (now - g_anchorMs > LANDED_HOLD_MS) {
       file_close();                  // 3 min immobile : atterri
-      g_flying    = false;
-      g_groundRef = alt_m;
-      g_preCount  = 0;
+      g_flying        = false;
+      g_groundRef     = alt_m;
+      g_preCount      = 0;
+      g_takeoffCandMs = 0;
     }
   }
 }
@@ -662,8 +723,16 @@ static void ap_offer_captive_dns(void)
 void FlightLog_ServerToggle(void)
 {
   if (!g_srvOn) {
-    // suspend logging: if a flight is in progress, close it cleanly
-    if (g_flying) { file_close(); g_flying = false; g_groundRef = NAN; }
+    // Suspend logging while the companion app is connected (FlightLog_Tick()
+    // already skips writes whenever g_srvOn is true). We deliberately do NOT
+    // close the file or clear g_flying/g_groundRef here anymore: that used to
+    // end the current flight's file on every app connection, so reconnecting
+    // the app mid-flight (or between bench tests) produced a fresh file each
+    // time instead of one continuous log. The open handle and flight state
+    // now simply survive the WiFi session and writing resumes into the SAME
+    // file once the app disconnects. Flush now so data already logged is
+    // safely on the card even if the bench loses power while the app is up.
+    if (g_file) g_file.flush();
     WiFi.mode(WIFI_AP);
     WiFi.softAP(AP_SSID, AP_PASS);
     ap_offer_captive_dns();                        // DHCP announces 192.168.4.1 as DNS

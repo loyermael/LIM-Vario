@@ -3,7 +3,7 @@
  *  CALCULATOR side (Classic ESP32: ample heap -> reliable AP host)
  *
  *  The calculator unit creates the WiFi Access Point "LIM-Vario".
- *  External devices (phone/XCSoar NMEA/UDP app) broadcast NMEA stream
+ *  External devices (a phone NMEA/UDP navigation app) broadcast an NMEA stream
  *  over UDP port 10110. We parse GROUND SPEED, forwarded to display
  *  unit inside vario data packet (airspeed + LIM_FLAG_GPS_OK flag)
  *  for total energy compensation.

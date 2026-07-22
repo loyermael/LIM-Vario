@@ -60,7 +60,7 @@ static bool     hasSpeed = false;
 ESP32Encoder enc1, enc2;
 
 // ---- Audio Synthesizer ----
-VarioSound varioSound(25); // DAC1 GPIO25 -> true analog sine wave output (clean, zero PWM rasp)
+VarioSound varioSound(25, 22, 23); // I2S -> MAX98357A: DIN=25, BCLK=22, LRCLK=23
 
 // ---- Physical Constants ----
 static const float P0_PA = 101325.0f;
@@ -142,9 +142,17 @@ void setup() {
   lastUs  = micros();
 }
 
+// Master vario received from the display (inertial-fused + TE vario). It drives
+// the speaker so the beep matches the needle EXACTLY. Falls back to the local baro TE vario
+// if the display link goes stale (link loss / display not sending yet).
+static volatile float g_masterVario  = 0.0f;
+static volatile bool  g_masterVarioOk = false;
+static uint32_t       g_masterVarioMs = 0;
+static inline bool MasterVario_Fresh() { return g_masterVarioOk && (millis() - g_masterVarioMs < 500); }
+
 // ---- Process incoming control commands from display unit (lim_cmd_t) ----
-// UART link is full-duplex: while calculator streams vario data frames,
-// display sends UI configuration updates (e.g. Sink Sound mute/full toggle)
+// UART link is full-duplex: while calculator streams vario data frames, display sends UI
+// config updates (Sink Sound, sound params) AND the master vario (30 Hz) for the speaker.
 static void Cmd_Poll() {
   static uint8_t buf[16];
   static size_t  idx  = 0;
@@ -152,14 +160,15 @@ static void Cmd_Poll() {
   while (Serial2.available()) {
     uint8_t b = (uint8_t)Serial2.read();
     if (idx == 0) {                                   // Wait for first known sync byte
-      if (b == LIM_CMD_SYNC0 || b == LIM_SCFG_SYNC0) buf[idx++] = b;
+      if (b == LIM_CMD_SYNC0 || b == LIM_SCFG_SYNC0 || b == LIM_VARIO_SYNC0) buf[idx++] = b;
       continue;
     }
     if (idx == 1) {                                   // Validate second sync byte matching first
-      if      (buf[0] == LIM_CMD_SYNC0  && b == LIM_CMD_SYNC1)  { buf[idx++] = b; need = sizeof(lim_cmd_t);  }
-      else if (buf[0] == LIM_SCFG_SYNC0 && b == LIM_SCFG_SYNC1) { buf[idx++] = b; need = sizeof(lim_scfg_t); }
-      else if (b == LIM_CMD_SYNC0 || b == LIM_SCFG_SYNC0)       { buf[0] = b; idx = 1; }
-      else                                                       { idx = 0; }
+      if      (buf[0] == LIM_CMD_SYNC0   && b == LIM_CMD_SYNC1)   { buf[idx++] = b; need = sizeof(lim_cmd_t);   }
+      else if (buf[0] == LIM_SCFG_SYNC0  && b == LIM_SCFG_SYNC1)  { buf[idx++] = b; need = sizeof(lim_scfg_t);  }
+      else if (buf[0] == LIM_VARIO_SYNC0 && b == LIM_VARIO_SYNC1) { buf[idx++] = b; need = sizeof(lim_vario_t); }
+      else if (b == LIM_CMD_SYNC0 || b == LIM_SCFG_SYNC0 || b == LIM_VARIO_SYNC0) { buf[0] = b; idx = 1; }
+      else                                                        { idx = 0; }
       continue;
     }
     if (idx >= sizeof(buf)) idx = 0;
@@ -175,13 +184,20 @@ static void Cmd_Poll() {
           GpsLink_SetCondorEnabled(g_condorEnabled);
           Serial.printf("[cmd] SinkSound=%s Condor=%s\n", sinkOn ? "Full" : "Mute", g_condorEnabled ? "ON" : "OFF");
         }
-      } else {                                        // ---- Audio Settings (pitch/wave/spread) ----
+      } else if (buf[0] == LIM_SCFG_SYNC0) {          // ---- Audio Settings (pitch/wave/spread) ----
         const lim_scfg_t* s = (const lim_scfg_t*)buf;
         if (lim_scfg_check(s)) {
           varioSound.setCenterFreq((float)s->pitch);
           varioSound.setWaveform(s->wave);
           varioSound.setSpread(s->spread);
           Serial.printf("[cfg] pitch=%uHz wave=%u spread=%u\n", s->pitch, s->wave, s->spread);
+        }
+      } else {                                        // ---- Master vario (display -> speaker) ----
+        const lim_vario_t* v = (const lim_vario_t*)buf;
+        if (lim_vario_check(v)) {
+          g_masterVario   = v->vario_cms * 0.01f;
+          g_masterVarioOk = true;
+          g_masterVarioMs = millis();
         }
       }
     }
@@ -303,8 +319,9 @@ void loop() {
       vario_te = ema(vario_te, te_raw, dt, 0.80f);
       vario_int = ema(vario_int, vario_te, dt, 20.0f);
     }
-    // Update audio synthesizer with current total energy vertical speed
-    varioSound.setVz(vario_te);
+    // Update audio synthesizer. Prefer the display's master vario (inertial+TE,
+    // so the beep matches the needle); fall back to local baro TE if the link is stale.
+    varioSound.setVz(MasterVario_Fresh() ? g_masterVario : vario_te);
   } else {
     // No valid sensor read -> default to zero (never propagate NaN which would glitch display needle)
     vario_f = vario_te = vario_int = 0.0f;

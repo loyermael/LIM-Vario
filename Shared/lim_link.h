@@ -163,3 +163,50 @@ static inline bool lim_scfg_check(const lim_scfg_t* s) {
   _s.crc8  = lim_scfg_crc(&_s); \
   (serial).write((const uint8_t*)&_s, sizeof(_s)); \
 } while(0)
+
+// ============================================================
+//  MASTER VARIO FRAME: DISPLAY -> CALCULATOR (5 bytes)
+//  The display owns the IMU, so it computes the best vario (inertial
+//  fusion + total-energy compensation). It streams that master vario back to the
+//  calculator so the SPEAKER (wired on the calculator) beeps the EXACT same vario as
+//  the needle -- a single master vario drives everything.
+//  Sent continuously (~30 Hz). Sync 0xC5/0x5C, distinct from cmd (0xC3) and scfg (0xC4).
+// ============================================================
+#define LIM_VARIO_SYNC0 0xC5
+#define LIM_VARIO_SYNC1 0x5C
+
+#pragma pack(push, 1)
+typedef struct {
+  uint8_t  sync0;     // 0xC5
+  uint8_t  sync1;     // 0x5C
+  int16_t  vario_cms; // master vario in cm/s (m/s * 100), signed -> +/-327 m/s, 1 cm/s resolution
+  uint8_t  crc8;      // XOR of all preceding bytes
+} lim_vario_t;
+#pragma pack(pop)
+
+static inline uint8_t lim_vario_crc(const lim_vario_t* v) {
+  const uint8_t* p = (const uint8_t*)v;
+  uint8_t x = 0;
+  for (uint32_t i = 0; i < sizeof(lim_vario_t) - 1; i++) x ^= p[i];
+  return x;
+}
+
+// CALCULATOR side: validate received master vario frame
+static inline bool lim_vario_check(const lim_vario_t* v) {
+  if (v->sync0 != LIM_VARIO_SYNC0 || v->sync1 != LIM_VARIO_SYNC1) return false;
+  return v->crc8 == lim_vario_crc(v);
+}
+
+// DISPLAY side: transmit master vario (m/s) via Arduino HardwareSerial
+// LIM_VARIO_SEND(Serial1, vario_ms)
+#define LIM_VARIO_SEND(serial, vario_ms) do { \
+  lim_vario_t _v; \
+  _v.sync0 = LIM_VARIO_SYNC0; \
+  _v.sync1 = LIM_VARIO_SYNC1; \
+  float _vm = (vario_ms); \
+  if (_vm >  320.0f) _vm =  320.0f; \
+  if (_vm < -320.0f) _vm = -320.0f; \
+  _v.vario_cms = (int16_t)(_vm * 100.0f); \
+  _v.crc8  = lim_vario_crc(&_v); \
+  (serial).write((const uint8_t*)&_v, sizeof(_v)); \
+} while(0)

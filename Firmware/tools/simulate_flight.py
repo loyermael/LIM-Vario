@@ -103,7 +103,7 @@ def read_igc_file(filepath):
 def print_dashboard(protocol, mode, phase, elapsed, alt, vario, tas, heading, sent_sentence, time_utc="00:00:00"):
     os.system('cls' if os.name == 'nt' else 'clear')
     print("=" * 75)
-    print("                 REPLAY DE VOL PLANEUR POUR FREEVARIO")
+    print("                    L!M VARIO - GLIDER FLIGHT REPLAY")
     print("=" * 75)
     print(f" Source : {mode:<25} | Protocole : {protocol}")
     print(f" Temps simulé : {elapsed:.1f} s            | Heure UTC : {time_utc}")
@@ -165,14 +165,10 @@ def main():
 
     print("\nProtocoles de sortie :")
     print(" [1] OpenVario / XCSoar (115200 baud, trames $PFV)")
-    print(" [2] Larus (38400 baud, trames $PLAR + $GPRMC)")
-    print(" [3] LK8000 / variometre paragliding (115200 baud, trames $LK8EX1 + $GPRMC)")
+    print(" [2] LK8000 / variometre paragliding (115200 baud, trames $LK8EX1 + $GPRMC)")
 
-    proto_choice = input("\nChoisissez le protocole (1, 2 ou 3) : ")
+    proto_choice = input("\nChoisissez le protocole (1 ou 2) : ")
     if proto_choice == '2':
-        protocol = "Larus"
-        baud = 38400
-    elif proto_choice == '3':
         protocol = "LK8000"
         baud = 115200
     else:
@@ -348,29 +344,6 @@ def main():
                     ser.write(gprmc.encode('ascii'))
 
                     sent_sentence = lk8ex1.strip()
-
-                else:
-                    # Protocole Larus
-                    plarv = f"$PLARV,{vario:.2f},{vaa:.2f},{alt:.1f},{tas:.1f}*"
-                    plarv += calculate_checksum(plarv) + "\r\n"
-                    ser.write(plarv.encode('ascii'))
-
-                    plara = f"$PLARA,0,0,{heading}*"
-                    plara += calculate_checksum(plara) + "\r\n"
-                    ser.write(plara.encode('ascii'))
-
-                    # Vent fictif
-                    plarw = f"$PLARW,220,3.5,I*"
-                    plarw += calculate_checksum(plarw) + "\r\n"
-                    ser.write(plarw.encode('ascii'))
-
-                    # Horloge de l'écran synchronisée avec le fichier IGC !
-                    h_val, m_val, s_val = time_utc.replace(":", "")[0:2], time_utc.replace(":", "")[2:4], time_utc.replace(":", "")[4:6]
-                    gprmc = f"$GPRMC,{h_val}{m_val}{s_val}.00,A,4600.00,N,00600.00,E,{tas/1.852:.1f},0.0,180526,,,A*"
-                    gprmc += calculate_checksum(gprmc) + "\r\n"
-                    ser.write(gprmc.encode('ascii'))
-
-                    sent_sentence = plarv.strip()
                 
                 # Dashboard console
                 print_dashboard(protocol, mode_name, phase, elapsed, alt, vario, tas, heading, sent_sentence, time_utc)

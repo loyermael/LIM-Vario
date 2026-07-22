@@ -8,7 +8,7 @@ This directory contains the firmware for the **Display Unit** of the L!M Vario o
 
 The Display Unit handles high-speed graphical rendering at 60 FPS and runs the real-time sensor fusion algorithms:
 - **Inertial AHRS & Kalman Filter:** Fuses the onboard QMI8658 6-axis IMU (accelerometer + gyroscope) with pressure telemetry received from the calculator unit to calculate instantaneous needle response.
-- **Total Energy (TE) Compensation:** Applies kinetic energy changes ($V/g \cdot dV/dt$) to compensate for stick movements.
+- **Total Energy (TE) Compensation:** Computes the compensation term from directly-measured forward acceleration ($V_{air} \cdot a_{fwd}/g$), avoiding the noise of numerically differentiating airspeed.
 - **Interactive LVGL 8.4 UI:** Built with EEZ Studio, featuring 6 customizable InfoBox zones, central glider Thermal Helper, 3D cylindrical zooming menus, and dual Climb/Cruise flight profiles.
 
 ---
@@ -64,7 +64,6 @@ python sync_ui.py
 
 ---
 
-## 📜 License & Acknowledgments
+## 📜 License
 
-Licensed under the **GPL-3.0 License**.
-Builds upon open-source contributions from the gliding community including **FreeVarioGauge**, **Larus**, and **XCSoar**.
+Licensed under the **GPL-3.0 License** — see the [root repository](../LICENSE) for details.

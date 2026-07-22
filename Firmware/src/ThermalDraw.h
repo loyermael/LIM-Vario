@@ -3,7 +3,7 @@
 
 // ============================================================
 //  Thermal Helper - RENDERER LAYER (LVGL programmatic rendering)
-//  Reads data layer (ThermalHelper) and draws Larus-style lift circle:
+//  Reads data layer (ThermalHelper) and draws the lift circle:
 //    - Glider symbol FIXED pointing up: offset left for right turns, right for left
 //    - The circular ring of lift dots rotates around (relative to track)
 //    - Dot radius proportional to vertical rate; color scales relative to average:

@@ -2,13 +2,13 @@
 #include <stdint.h>
 
 // ============================================================
-//  Thermal Helper - Data Layer (Larus style: 24 bins of 15 deg)
+//  Thermal Helper - Data Layer (24 bins of 15 deg)
 //  Binned vertical speed categorized by GPS ground track during circling.
 //  PURE logic layer (no LVGL dependency) -> verifiable on bench / serial simulator.
 //  The renderer layer reads the bins + statistics + turn direction.
 // ============================================================
 
-#define TH_BINS    24        // 24 bins of 15 degrees each (Larus architecture)
+#define TH_BINS    24        // 24 bins of 15 degrees each
 #define TH_AGE_MS  30000     // Bin expiration threshold (accounts for wind drift)
 #define TH_BLEND   0.30f     // Exponential smoothing filter factor: bin = (1-a)*bin + a*vario
 

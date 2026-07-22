@@ -56,7 +56,7 @@ static volatile int g_volume = 0;    // 0..20 (default 0 = silent; aligned with 
 static uint32_t g_pktCount = 0;
 
 // ============================================================
-//  FUSION IMU + BARO "facon Larus" (voir VarioFusion.cpp)
+//  FUSION IMU + BARO (voir VarioFusion.cpp)
 //  AHRS Mahony + Kalman 4 etats {alt, vario, accel, biais}.
 //  Tourne dans Driver_Loop (core 0, cadence reguliere ~50 Hz).
 // ============================================================
@@ -77,7 +77,7 @@ static bool     g_inFlight   = false; // flight state (takeoff / landing detecti
 
 // ============================================================
 //  SON VARIO (GPIO0 → MOSFET → buzzer piezo passif)
-//  Algorithme style Larus/LX :
+//  Algorithme de fusion inertielle :
 //    Montee  : freq 700→2000 Hz, cadence 1200→120 ms
 //    Neutral : silence (-0.3 to +0.15 m/s)
 //    Descente: 350 Hz continu (si Full) ou silence (si Mute)
@@ -174,7 +174,8 @@ enum InfoBoxMetric {
   IB_STF         = 15,  // optimal cruise speed (MacCready + polar)
   IB_ALERTS      = 16,  // active faults (link / battery / SD / GPS) else "OK"
   IB_MODE        = 17,  // profil d'info-boxes actif : Climb ou Cruise
-  IB_METRIC_MAX  = 18
+  IB_STF_CMD     = 18,  // speed-to-fly command: fly faster (+) / slower (-)
+  IB_METRIC_MAX  = 19
 };
 
 enum CenterZoneMetric {
@@ -220,7 +221,10 @@ static const char* const s_ibMetricNames[IB_METRIC_MAX] = {
   "Glide Ratio",
   "Disabled",
   "Netto",
-  "Speed to Fly"
+  "Speed to Fly",
+  "Alerts",
+  "Mode",
+  "STF Command"
 };
 
 static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
@@ -241,7 +245,8 @@ static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
   "Netto",
   "STF",
   "Alerts",
-  "Mode"
+  "Mode",
+  "STF Cmd"
 };
 
 static const char* const s_centerMetricAbbrev[CENTER_METRIC_MAX] = {
@@ -259,7 +264,7 @@ typedef struct {
   int v3; float si3;
 } GliderData;
 
-#include "XCSoar_Polars.h"
+#include "GliderPolars.h"
 
 static GliderData g_gliderDb[300];
 static int g_gliderDbCount = 0;
@@ -267,13 +272,13 @@ static char g_gliderNamesBuf[300 * 32];
 static int g_gliderNamesBufOffset = 0;
 
 static void GliderDB_LoadDefault() {
-  g_gliderDbCount = XCSOAR_GLIDERS_COUNT;
+  g_gliderDbCount = GLIDER_POLARS_COUNT;
   g_gliderNamesBufOffset = 0;
   for (int i = 0; i < g_gliderDbCount; i++) {
-    g_gliderDb[i] = XCSOAR_GLIDERS[i];
-    int len = strlen(XCSOAR_GLIDERS[i].name);
+    g_gliderDb[i] = GLIDER_POLARS[i];
+    int len = strlen(GLIDER_POLARS[i].name);
     if (g_gliderNamesBufOffset + len + 1 < (int)sizeof(g_gliderNamesBuf)) {
-      strcpy(&g_gliderNamesBuf[g_gliderNamesBufOffset], XCSOAR_GLIDERS[i].name);
+      strcpy(&g_gliderNamesBuf[g_gliderNamesBufOffset], GLIDER_POLARS[i].name);
       g_gliderDb[i].name = &g_gliderNamesBuf[g_gliderNamesBufOffset];
       g_gliderNamesBufOffset += len + 1;
     }
@@ -595,6 +600,7 @@ static const SmItem IBIT_LIST[] = {
   {"Flight Time", ST_INFO, IB_FLIGHT_TIME}, {"Wind", ST_INFO, IB_WIND}, {"Climb Gain", ST_INFO, IB_CLIMB_GAIN},
   {"Flight Level", ST_INFO, IB_FLIGHT_LVL}, {"Glide Ratio", ST_INFO, IB_GLIDE}, {"Airspeed", ST_INFO, IB_AIRSPEED},
   {"Ground Speed", ST_INFO, IB_GND_SPEED},
+  {"Netto", ST_INFO, IB_NETTO}, {"Speed to Fly", ST_INFO, IB_STF}, {"STF Command", ST_INFO, IB_STF_CMD},
   {"Alerts", ST_INFO, IB_ALERTS}, {"Mode", ST_INFO, IB_MODE},
   {"Disabled", ST_INFO, IB_EMPTY},
   {"Back", ST_BACK, 0}
@@ -2172,18 +2178,20 @@ static void Menu_Apply()
   if (delta != 0) lv_obj_scroll_by(objects.item_list, 0, -delta, LV_ANIM_OFF);
 }
 
-// Compensation TE par GPS (V0.7) : vario_comp = vario + (V/g)*dV/dt
-//  V = GPS ground speed (received over WiFi). Without a fix -> passthrough.
+// Total-energy compensation (inertial) : vario_comp = vario_fused + compensation.
+//  compensation = (V_air . a)/g  ~=  TAS * a_forward / g   (MS4525 airspeed + IMU accel)
+// The along-track acceleration is measured DIRECTLY by the IMU (VarioFusion_GetFwdAccel),
+// instead of differentiating the noisy airspeed signal -> instantaneous, low-noise TE
+// compensation -> instantaneous and low-noise (no numerical differentiation of airspeed).
+// Without a pitot (no MS4525) -> fall back to the classic GPS ground-speed derivative.
 static void Comp_Apply()
 {
-  // Condor mode: g_vario from the calculator is already the Condor evario (already TE-compensated
-  // sim side). Additionally fusing the bench's physical IMU/baro (stationary, unrelated to
-  // in the simulated flight) only adds noise -> needle always larger than Condor.
-  // Complete bypass of the fusion in this mode (see "effect to wire" comment on g_condorSim).
+  // Condor mode: g_vario is already the Condor evario (TE-compensated sim-side). Bypass fusion.
   if (g_condorSim) { g_varioComp = isnan(g_vario) ? 0.0f : g_vario; return; }
 
   static uint32_t lastUs = 0;
-  static float    vF = 0.0f, vPrev = 0.0f;
+  static float    termF  = 0.0f;              // smoothed compensation term
+  static float    vF = 0.0f, vPrev = 0.0f;    // GPS fallback derivative state
   float base = isnan(g_varioFused) ? 0.0f : g_varioFused;
 
   uint32_t nowUs = micros();
@@ -2193,17 +2201,27 @@ static void Comp_Apply()
   if (dt <= 0.0f || dt > 0.5f) { g_varioComp = base; return; }
 
   float term = 0.0f;
-  if (g_gpsOk) {
-    float v = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;  // airspeed if pitot, else GPS ground speed
-    vF += (v - vF) * (dt / (0.5f + dt));     // speed smoothing
+  if (g_airspeed > 5.0f) {
+    // --- Scalar-product method: TAS * a_forward / g (IMU acceleration, no differentiation) ---
+    float aFwd = VarioFusion_GetFwdAccel();           // m/s^2, along the flight path
+    float raw  = g_airspeed * aFwd / 9.80665f;        // == (V/g)*dV/dt, but noise-free
+    termF += (raw - termF) * (dt / (0.4f + dt));      // light smoothing vs IMU vibration
+    term = termF;
+    vF = vPrev = 0.0f;                                 // keep GPS state clean for handover
+  } else if (g_gpsOk) {
+    // --- Fallback (no pitot): classic GPS ground-speed derivative ---
+    float v = g_gndSpeed;
+    vF += (v - vF) * (dt / (0.5f + dt));
     float dVdt = (vF - vPrev) / dt;
     vPrev = vF;
-    term = (vF / 9.80665f) * dVdt;           // (V/g)*dV/dt
-    if (term >  5.0f) term =  5.0f;          // garde-fous
-    if (term < -5.0f) term = -5.0f;
+    term  = (vF / 9.80665f) * dVdt;
+    termF = term;                                      // seed smoother for handover to pitot
   } else {
-    vF = vPrev = 0.0f;                        // reset quand pas de fix
+    vF = vPrev = 0.0f;
+    termF = 0.0f;
   }
+  if (term >  5.0f) term =  5.0f;                      // safety clamps
+  if (term < -5.0f) term = -5.0f;
   g_varioComp = base + term;
 }
 
@@ -2268,8 +2286,24 @@ static void Circling_Apply()
 // + wind). 1 Hz sampling (aligned with Circling_Apply), dt-weighted vector accumulation,
 // reset on each new full turn (cumulative rotation 360°).
 // Outside a turn: accumulator reset, last estimate kept for display.
-static float g_windSpeedMs = NAN;  // estimated wind speed (m/s -- derived from g_gndSpeed in m/s)
-static float g_windDirDeg   = NAN;  // direction D'OU vient le vent (deg, convention meteo)
+static float g_windSpeedMs = NAN;  // LIVE wind speed (m/s) -- feeds the green/instant arrow
+static float g_windDirDeg   = NAN;  // LIVE direction D'OU vient le vent (deg, convention meteo)
+static float g_windAvgSpeed = NAN;  // AVERAGED wind speed (m/s) -- feeds the grey/averaged wind arrow
+static float g_windAvgDir    = NAN; // AVERAGED direction (deg)
+
+// Blends a new per-turn wind estimate into a smoothed one (k = blend weight in [0..1]),
+// handling the circular wrap of the direction. Higher k = more reactive.
+static void wind_blend(float* spd, float* dir, float newSpd, float newDir, float k)
+{
+  *spd += (newSpd - *spd) * k;
+  float dd = newDir - *dir;
+  while (dd > 180.0f)  dd -= 360.0f;
+  while (dd < -180.0f) dd += 360.0f;
+  *dir += dd * k;
+  if (*dir < 0.0f)    *dir += 360.0f;
+  if (*dir >= 360.0f) *dir -= 360.0f;
+}
+
 static void Wind_Apply()
 {
   static uint32_t lastMs    = 0;
@@ -2306,17 +2340,42 @@ static void Wind_Apply()
     float newDir   = atan2f(-windEast, -windNorth) * (180.0f / PI);  // "vent DE" = oppose
     if (newDir < 0.0f) newDir += 360.0f;
 
-    if (isnan(g_windSpeedMs)) { g_windSpeedMs = newSpeed; g_windDirDeg = newDir; }
-    else {
-      g_windSpeedMs += (newSpeed - g_windSpeedMs) * 0.4f;   // lissage entre tours successifs
-      float dd = newDir - g_windDirDeg;
-      while (dd > 180.0f)  dd -= 360.0f;
-      while (dd < -180.0f) dd += 360.0f;
-      g_windDirDeg += dd * 0.4f;
-      if (g_windDirDeg < 0.0f)   g_windDirDeg += 360.0f;
-      if (g_windDirDeg >= 360.0f) g_windDirDeg -= 360.0f;
+    if (isnan(g_windSpeedMs)) {
+      g_windSpeedMs = g_windAvgSpeed = newSpeed;   // seed both estimates on the first turn
+      g_windDirDeg  = g_windAvgDir   = newDir;
+    } else {
+      wind_blend(&g_windSpeedMs,  &g_windDirDeg, newSpeed, newDir, 0.5f);   // LIVE  (~last turns)
+      wind_blend(&g_windAvgSpeed, &g_windAvgDir, newSpeed, newDir, 0.15f);  // AVERAGED (~30 s)
     }
     sumEast = sumNorth = sumDt = rotAccum = 0.0f;   // reset for the next turn
+  }
+}
+
+// Energy Arrow (Joe Wurts method): the vector difference between the live wind and the
+// averaged wind. Near a thermal the horizontal flow field bends the local wind, so this
+// difference points toward likely lift (at low altitude; it reverses at high altitude --
+// reverses at high altitude). Needs both wind estimates (circling-derived). Scaled for display.
+// Exposes g_energyDir (compass bearing the arrow points TO) + g_energyMag (m/s * scale) for
+// wiring to the EEZ 'img_wind_arrow_energy' image (rotate rel = g_energyDir - g_gpsTrack).
+static float g_energyDir = NAN;
+static float g_energyMag = NAN;
+#define ENERGY_ARROW_SCALE 3.5f   // display prominence factor (0..10)
+static void EnergyArrow_Apply()
+{
+  if (isnan(g_windSpeedMs) || isnan(g_windDirDeg) ||
+      isnan(g_windAvgSpeed) || isnan(g_windAvgDir)) { g_energyDir = g_energyMag = NAN; return; }
+  // Air-velocity vectors (where the wind blows TO = FROM + 180), compass frame (E=sin, N=cos).
+  float dl = (g_windDirDeg + 180.0f) * 0.01745329f;
+  float da = (g_windAvgDir + 180.0f) * 0.01745329f;
+  float eE = g_windSpeedMs * sinf(dl) - g_windAvgSpeed * sinf(da);
+  float eN = g_windSpeedMs * cosf(dl) - g_windAvgSpeed * cosf(da);
+  float mag = sqrtf(eE * eE + eN * eN);
+  g_energyMag = mag * ENERGY_ARROW_SCALE;
+  if (mag > 0.05f) {
+    g_energyDir = atan2f(eE, eN) * 57.29578f;   // bearing the arrow points TO
+    if (g_energyDir < 0.0f) g_energyDir += 360.0f;
+  } else {
+    g_energyDir = NAN;
   }
 }
 
@@ -2486,19 +2545,39 @@ static void Netto_Apply()
   g_varioNetto = (g_airspeed > 5.0f) ? (g_varioComp - Polar_Sink(g_airspeed)) : NAN;
 }
 
-// Optimal cruise speed (MacCready): tangent to the polar from (0,-MC), classic MacCready
-// theory. For sink(V)=aV^2+bV+c, the tangency point satisfies a*V^2 = c + MC (expansion
-// of sink'(V) = (sink(V)+MC)/V). No wind compensation for now (later step, see wind
-// estimation while circling).
-static float g_stfSpeed = NAN;
+// Speed to Fly (classic MacCready theory). For sink(V)=aV^2+bV+c, the still-air tangency from
+// (0,-MC) satisfies a*V^2 = c + MC. We extend it two ways, now that we have a pitot + wind:
+//  - DYNAMIC (dolphin): shift the MC target by the air-mass vertical movement (netto) ->
+//    sinking air = fly faster, rising air = ease off.
+//  - HEADWIND: add ~50% of the along-track headwind component (fly faster into wind).
+// g_stfCommand is the actionable delta (speed command): + = fly faster, - = slow down.
+static float g_stfSpeed   = NAN;   // optimal cruise airspeed (km/h)
+static float g_stfCommand = NAN;   // km/h to change: >0 speed up, <0 slow down
 static void STF_Apply()
 {
   float a, b, c;
   Polar_Fit(&a, &b, &c);
+  if (fabsf(a) < 1e-6f) { g_stfSpeed = g_stfCommand = NAN; return; }
   float mc = g_mcTenths / 10.0f;
-  if (fabsf(a) < 1e-6f) { g_stfSpeed = NAN; return; }
-  float v2 = (c + mc) / a;
-  g_stfSpeed = (v2 > 0.0f) ? sqrtf(v2) : NAN;
+
+  // Dynamic (dolphin) STF: shift the MacCready target by the current netto (air mass, + up).
+  float w  = isnan(g_varioNetto) ? 0.0f : g_varioNetto;
+  float v2 = (c + mc - w) / a;
+  float vstf = (v2 > 0.0f) ? sqrtf(v2) : NAN;
+
+  // Headwind compensation (uses the circling wind estimate): fly faster into a headwind.
+  if (!isnan(vstf) && !isnan(g_windSpeedMs) && !isnan(g_gpsTrack)) {
+    float rel      = (g_windDirDeg - g_gpsTrack) * 0.01745329f;  // wind FROM vs our track
+    float headwind = g_windSpeedMs * cosf(rel);                  // m/s, + = headwind
+    vstf += headwind * 3.6f * 0.5f;                              // +50% of headwind, km/h
+  }
+  g_stfSpeed = vstf;
+
+  // Actionable command: meaningful only in cruise (not circling) with a pitot airspeed.
+  if (!isnan(vstf) && !g_circling && g_airspeed > 5.0f)
+    g_stfCommand = vstf - g_airspeed * 3.6f;   // km/h
+  else
+    g_stfCommand = NAN;
 }
 
 #if SIM_THERMAL
@@ -2794,6 +2873,14 @@ static void Labels_Apply()
         snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
+      case IB_STF_CMD: {
+        if (isnan(g_stfCommand)) { snprintf(buf, sizeof(buf), "STF ---"); break; }
+        float cmd = g_uSpeed ? g_stfCommand * 0.539957f : g_stfCommand;   // km/h -> kt
+        if      (cmd >  3.0f) snprintf(buf, sizeof(buf), "Faster %.0f", cmd);   // too slow -> speed up
+        else if (cmd < -3.0f) snprintf(buf, sizeof(buf), "Slower %.0f", -cmd);  // too fast -> ease off
+        else                  snprintf(buf, sizeof(buf), "On Speed");
+        break;
+      }
       case IB_ALERTS: {
         // Most severe fault first. LINK = frozen data (the sneakiest one),
         // SD = log lost, BAT = endurance, GPS = no more wind/track.
@@ -3021,9 +3108,22 @@ void loop()
   // when the calculator is ready to receive -> the sound adopts the menu defaults.
   static bool s_soundCfgSent = false;
   if (!s_soundCfgSent && millis() > 2000) { SoundCfg_Send(); s_soundCfgSent = true; }
-  Comp_Apply();     // compensation TE GPS (vitesse recue du calculateur) -> g_varioComp
+  Comp_Apply();     // TE compensation (IMU accel scalar product) -> g_varioComp
+
+  // Stream the master vario back to the calculator (~30 Hz) so the speaker beeps the exact
+  // same clean vario as the needle (the calc has no IMU -> it can't compute it itself).
+  {
+    static uint32_t lastVarioTx = 0;
+    uint32_t nowv = millis();
+    if (nowv - lastVarioTx >= 33) {
+      lastVarioTx = nowv;
+      LIM_VARIO_SEND(Serial1, isfinite(g_varioComp) ? g_varioComp : 0.0f);
+    }
+  }
+
   Circling_Apply(); // detection spirale / vol droit -> g_circling + g_turnDir
-  Wind_Apply();      // estimation vent (derive GPS en spirale) -> g_windSpeedMs/g_windDirDeg
+  Wind_Apply();       // estimation vent (derive GPS en spirale) -> g_windSpeedMs/g_windDirDeg
+  EnergyArrow_Apply(); // fleche energie (difference vectorielle vent live - moyen) -> g_energyDir/Mag
   // Auto-switch the displayed info-boxes between the Climb and Cruise profile, except
   // while editing one of the two profiles in the menu (g_infoBoxConfig then deliberately
   // points to the chosen one -> do not overwrite it from here).

@@ -39,6 +39,124 @@ static bool      g_condorEnabled = false;  // Condor sim toggle (System menu), v
 
 void GpsLink_SetCondorEnabled(bool enabled) { g_condorEnabled = enabled; }
 
+// ============================================================
+//  PHYSICAL GPS - u-blox GPSM10 on hardware UART1 (schematic v2)
+//  RX = GPIO34 (input-only, module TX), TX = GPIO13 (config, module RX).
+//  Feeds the SAME parseNmea() / g_speed / g_track / g_fix state as the
+//  WiFi/UDP path: both sources coexist, the 10 Hz module dominates.
+// ============================================================
+#define GPS_RX_PIN 34
+#define GPS_TX_PIN 13
+
+static HardwareSerial GpsSerial(1);   // UART1 (UART0=USB debug, UART2=display link)
+static bool           g_hwGps = false;
+
+static void parseNmea(char* s);       // forward decl (defined below)
+
+// Sends a UBX frame with a code-computed Fletcher-8 checksum (no hand math -> no error).
+static void ubxSend(uint8_t cls, uint8_t id, const uint8_t* p, uint16_t len)
+{
+  uint8_t head[6] = { 0xB5, 0x62, cls, id, (uint8_t)(len & 0xFF), (uint8_t)(len >> 8) };
+  uint8_t ckA = 0, ckB = 0;
+  for (int i = 2; i < 6; i++) { ckA += head[i]; ckB += ckA; }
+  for (uint16_t i = 0; i < len; i++) { ckA += p[i]; ckB += ckA; }
+  uint8_t ck[2] = { ckA, ckB };
+  GpsSerial.write(head, 6);
+  if (len) GpsSerial.write(p, len);
+  GpsSerial.write(ck, 2);
+}
+
+// Appends a config item: key (U4, little-endian) + value (sz bytes, little-endian).
+static void ubxAddKey(uint8_t* b, uint16_t& n, uint32_t key, uint32_t val, uint8_t sz)
+{
+  b[n++] = key & 0xFF;        b[n++] = (key >> 8)  & 0xFF;
+  b[n++] = (key >> 16) & 0xFF; b[n++] = (key >> 24) & 0xFF;
+  for (uint8_t i = 0; i < sz; i++) { b[n++] = val & 0xFF; val >>= 8; }
+}
+
+// Waits briefly for a UBX-ACK-ACK / ACK-NAK and logs it (on-hardware config check).
+static void gpsWaitAck(const char* what)
+{
+  uint32_t t0 = millis();
+  uint8_t  m[4] = { 0, 0, 0, 0 };   // rolling window: B5 62 05 (01=ACK | 00=NAK)
+  while (millis() - t0 < 300) {
+    if (!GpsSerial.available()) continue;
+    m[0] = m[1]; m[1] = m[2]; m[2] = m[3]; m[3] = (uint8_t)GpsSerial.read();
+    if (m[0] == 0xB5 && m[1] == 0x62 && m[2] == 0x05) {
+      Serial.printf("[gps] %s -> %s\n", what, m[3] == 0x01 ? "ACK" : "NAK");
+      return;
+    }
+  }
+  Serial.printf("[gps] %s -> no ack\n", what);
+}
+
+// Configures 10 Hz + RMC/GGA only via the M10 configuration interface (UBX-CFG-VALSET,
+// RAM layer). The genuine u-blox NEO-M10 IGNORES the legacy CFG-MSG/CFG-RATE messages,
+// so the modern key/value interface is mandatory. RMC carries ground speed + track (all
+// the TE pipeline needs); the rest is muted so the 10 Hz stream fits the UART budget.
+static void gpsConfigure(void)
+{
+  uint8_t p[96]; uint16_t n = 0;
+  p[n++] = 0x00; p[n++] = 0x01; p[n++] = 0x00; p[n++] = 0x00;   // version, layers=RAM, reserved
+  ubxAddKey(p, n, 0x30210001, 100, 2);   // CFG-RATE-MEAS = 100 ms  -> 10 Hz
+  ubxAddKey(p, n, 0x30210002, 1,   2);   // CFG-RATE-NAV  = 1 cycle
+  ubxAddKey(p, n, 0x209100AC, 1,   1);   // CFG-MSGOUT-NMEA_RMC_UART1 = on
+  ubxAddKey(p, n, 0x209100BB, 1,   1);   // CFG-MSGOUT-NMEA_GGA_UART1 = on
+  ubxAddKey(p, n, 0x209100CA, 0,   1);   // GLL off
+  ubxAddKey(p, n, 0x209100C0, 0,   1);   // GSA off
+  ubxAddKey(p, n, 0x209100C5, 0,   1);   // GSV off
+  ubxAddKey(p, n, 0x209100B1, 0,   1);   // VTG off
+  ubxSend(0x06, 0x8A, p, n);
+  gpsWaitAck("cfg 10Hz/RMC");
+}
+
+// Detects the module's current baud, forces 115200 if needed, then applies 10 Hz config.
+static void gpsSerialBegin(void)
+{
+  const uint32_t cand[3] = { 115200, 9600, 38400 };  // u-blox default is 9600; 10Hz needs 115200
+  uint32_t baud = 115200;
+  bool     locked = false;
+
+  for (uint8_t k = 0; k < 3 && !locked; k++) {
+    GpsSerial.begin(cand[k], SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+    uint32_t t0 = millis();
+    while (millis() - t0 < 350) {                     // listen for an NMEA sentence start
+      if (GpsSerial.available() && GpsSerial.read() == '$') { baud = cand[k]; locked = true; break; }
+    }
+  }
+  g_hwGps = locked;
+  Serial.printf("[gps] hw serial %s @ %u baud\n",
+                locked ? "detected" : "NOT FOUND (assuming 115200)", (unsigned)baud);
+  if (!locked) GpsSerial.begin(115200, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
+
+  // Push the module to 115200 if it was slower, so 10 Hz NMEA fits the link.
+  // NEO-M10 baud is set via CFG-VALSET (CFG-UART1-BAUDRATE), NOT legacy CFG-PRT.
+  if (baud != 115200) {
+    uint8_t p[12]; uint16_t n = 0;
+    p[n++] = 0x00; p[n++] = 0x01; p[n++] = 0x00; p[n++] = 0x00;   // version, layers=RAM, reserved
+    ubxAddKey(p, n, 0x40520001, 115200, 4);   // CFG-UART1-BAUDRATE = 115200
+    ubxSend(0x06, 0x8A, p, n);
+    GpsSerial.flush(); delay(100);
+    GpsSerial.updateBaudRate(115200);
+    delay(50);
+  }
+  gpsConfigure();
+}
+
+// Assembles NMEA lines from UART1 and feeds them to the shared parser.
+static void gpsSerialLoop(void)
+{
+  static char gb[100]; static int gn = 0;
+  while (GpsSerial.available()) {
+    char c = (char)GpsSerial.read();
+    if (c == '\n' || c == '\r') {
+      if (gn > 0) { gb[gn] = 0; if (gb[0] == '$') parseNmea(gb); gn = 0; }
+    } else if (gn < (int)sizeof(gb) - 1) {
+      gb[gn++] = c;
+    }
+  }
+}
+
 void GpsLink_Begin(void)
 {
   // AP "LIM-GPS": receives GPS data (NMEA/UDP, port 10110) from mobile phone/navigation app.
@@ -49,6 +167,7 @@ void GpsLink_Begin(void)
                 ok ? "OK" : "FAIL", WiFi.softAPIP().toString().c_str(),
                 (unsigned)ESP.getFreeHeap());
   if (ok) udp.begin(GPS_UDP_PORT);
+  gpsSerialBegin();   // Physical GPSM10 on UART1 (10 Hz), coexists with the UDP path
   g_up = true;   // Always active: GpsLink_Loop also reads serial port (Condor / USB bridge)
 }
 
@@ -113,6 +232,9 @@ static void parseCondor(char* s)
 void GpsLink_Loop(void)
 {
   if (!g_up) return;
+
+  // 0) PHYSICAL GPS (GPSM10 on UART1) - real-flight source, 10 Hz NMEA
+  gpsSerialLoop();
 
   // 1) CONDOR via USB serial port (PC bench testing bridge; inactive during flight) - auto-detected
   static char sb[128]; static int sn = 0;

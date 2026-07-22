@@ -31,3 +31,9 @@ bool VarioFusion_Ready(void);
 
 // Latest earth-frame vertical acceleration (m/s^2, gravity removed) - for SD data log
 float VarioFusion_GetVertAccel(void);
+
+// Latest FORWARD (along-fuselage) linear acceleration (m/s^2, gravity removed).
+// Used for inertial total-energy compensation: comp = TAS * a_forward / g, which
+// replaces the noisy numerical derivative of airspeed with a direct IMU measurement.
+// Assumes the board +X axis points toward the glider nose (see IMU_FWD_SIGN in .cpp).
+float VarioFusion_GetFwdAccel(void);

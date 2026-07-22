@@ -13,8 +13,6 @@ A dual-ESP32 soaring instrument pairing a Waveshare ESP32-S3 2.1″ round IPS di
 ![Version](https://img.shields.io/badge/firmware-v0.9.0-success)
 ![Status](https://img.shields.io/badge/status-active%20development-yellow)
 
-<sub>Inspired by [Larus](https://github.com/larus-breeze) · [LXNAV](https://gliding.lxnav.com/) · [XCSoar](https://github.com/XCSoar) · [FreeVario](https://freevario.de)</sub>
-
 </div>
 
 ---
@@ -30,7 +28,7 @@ A dual-ESP32 soaring instrument pairing a Waveshare ESP32-S3 2.1″ round IPS di
 - [Repository Structure](#repository-structure)
 - [Development Tools](#development-tools)
 - [Roadmap](#roadmap)
-- [License & Acknowledgments](#license--acknowledgments)
+- [License](#license)
 
 ---
 
@@ -49,7 +47,7 @@ The project is fully open (GPL-3.0) and designed to be reproducible from off-the
 
 **Total-energy & polar computations**
 - Real-time TE compensation ($V_{comp} = V_{fuse} + \tfrac{V}{g}\tfrac{dV}{dt}$) from airspeed or GPS ground speed.
-- MacCready speed-to-fly, netto and glide-ratio derived from a configurable glider polar (XCSoar database import).
+- MacCready speed-to-fly, netto and glide-ratio derived from a configurable glider polar (built-in polar database, 150+ gliders).
 
 **Modern UI (LVGL 8.4 / EEZ Studio)**
 - Analog needle, MacCready arrow and integrated-climb arrow on a round gauge.
@@ -172,14 +170,12 @@ LIM-Vario/
 
 ## Roadmap
 
-- MS4525 airspeed wiring + XCSoar-style TE compensation.
 - GPS-time → RTC synchronization.
 - FLARM traffic display (radar + collision alerts).
 - Full-sun high-contrast display mode.
+- Battery telemetry over the calculator link.
 - Real-flight validation of thermal assistant and wind estimation.
 
-## License & Acknowledgments
+## License
 
 Distributed under the **GPL-3.0** license — see [`LICENSE`](LICENSE). Contributions, issues and pull requests from glider pilots and firmware developers are welcome.
-
-Thanks to the open-source gliding community and to the authors of **Larus**, **XCSoar** and **FreeVario** for pioneering open flight instrumentation.

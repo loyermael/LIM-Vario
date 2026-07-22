@@ -1,7 +1,9 @@
-#ifndef XCSOAR_POLARS_H
-#define XCSOAR_POLARS_H
+#ifndef GLIDER_POLARS_H
+#define GLIDER_POLARS_H
 
-static const GliderData XCSOAR_GLIDERS[] = {
+// Glider polar database — sink rate (m/s) at three reference speeds (km/h),
+// reference mass and water-ballast capacity for each sailplane.
+static const GliderData GLIDER_POLARS[] = {
   { "206 Hornet", 227, 100, 80, -0.606f, 120, -0.99f, 160, -1.918f },
   { "303 Mosquito", 242, 0, 100, -0.68f, 120, -0.92f, 150, -1.45f },
   { "401 Kestrel (17m)", 260, 33, 95, -0.62f, 110, -0.76f, 175, -2.01f },
@@ -203,6 +205,6 @@ static const GliderData XCSOAR_GLIDERS[] = {
   { "Zugvogel IV", 242, 0, 70, -0.7f, 75, -0.74f, 135, -1.93f },
   { "Zuni II", 238, 182, 110, -0.88f, 167, -2.21f, 203, -3.6f }
 };
-static const int XCSOAR_GLIDERS_COUNT = sizeof(XCSOAR_GLIDERS)/sizeof(XCSOAR_GLIDERS[0]);
+static const int GLIDER_POLARS_COUNT = sizeof(GLIDER_POLARS)/sizeof(GLIDER_POLARS[0]);
 
 #endif

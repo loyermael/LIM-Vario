@@ -18,12 +18,18 @@
 #define Q_BIAS       1e-4f    // Slow drift rate of vertical accelerometer bias
 #define R_ALT        0.25f    // m^2        : Barometric altitude measurement noise (~0.5 m std dev)
 #define R_ACC        0.36f    // (m/s^2)^2  : Vertical acceleration noise (~0.6 m/s^2 std dev)
-// DISPLAY time constant (output smoothing filter, similar to Larus/LX instruments:
+// DISPLAY time constant (output smoothing filter, as on soaring instruments:
 // internal Kalman state tracks rapidly, while output needle display is gently smoothed)
 #define OUT_TAU      0.7f     // seconds : 0.4 = responsive/snappy, 1.0 = smooth/calm
 
 #define G_MS2        9.80665f
 #define DEG2RAD      0.017453293f
+
+// IMU forward axis = glider nose direction, in board body frame.
+// The board +X axis is ASSUMED to point toward the nose. If the real mounting differs,
+// change this: use +1/-1 to flip, or edit forward_accel() to pick the Y or Z component.
+// Bench check: push the unit forward (accelerate along the nose) -> GetFwdAccel() must go +.
+#define IMU_FWD_SIGN  (+1.0f)
 
 // ------------------------------------------------------------
 //  Internal State Variables
@@ -81,6 +87,18 @@ static float vertical_accel(float ax, float ay, float az)
            + 2.0f*(q2*q3 + q0*q1)*ay
            + (q0*q0 - q1*q1 - q2*q2 + q3*q3)*az;  // in g units, ~+1 at rest
   return (ez - 1.0f) * G_MS2;
+}
+
+// Forward (along-fuselage) linear acceleration (m/s^2, gravity removed).
+// The accelerometer reads specific force = a_linear + gravity_reaction. The gravity
+// reaction, in body frame, is the earth-up unit vector expressed in body coords = 3rd row
+// of R = (2(q1q3-q0q2), 2(q2q3+q0q1), q0^2-q1^2-q2^2+q3^2). Subtracting its X component
+// from ax leaves the pure forward linear acceleration (= dV/dt along the flight path).
+static float forward_accel(float ax, float ay, float az)
+{
+  float gravX_body = 2.0f*(q1*q3 - q0*q2);        // gravity projection on body +X (g units)
+  (void)ay; (void)az;
+  return IMU_FWD_SIGN * (ax - gravX_body) * G_MS2; // m/s^2, + when accelerating nose-forward
 }
 
 // ------------------------------------------------------------
@@ -152,6 +170,7 @@ static void kalman_update_acc(float z)
 //  API Implementation
 // ------------------------------------------------------------
 static float g_lastAVert = 0.0f;
+static float g_lastAFwd  = 0.0f;
 
 bool VarioFusion_Ready(void)
 {
@@ -159,6 +178,7 @@ bool VarioFusion_Ready(void)
 }
 
 float VarioFusion_GetVertAccel(void) { return g_lastAVert; }
+float VarioFusion_GetFwdAccel(void)  { return g_lastAFwd; }
 
 float VarioFusion_Step(float ax, float ay, float az,
                        float gx, float gy, float gz,
@@ -184,6 +204,7 @@ float VarioFusion_Step(float ax, float ay, float az,
   mahony_update(gx * DEG2RAD, gy * DEG2RAD, gz * DEG2RAD, ax, ay, az, kp, dt);
   float aVert = vertical_accel(ax, ay, az);
   g_lastAVert = aVert;
+  g_lastAFwd  = forward_accel(ax, ay, az);   // for inertial TE compensation
 
   // --- Kalman Filter ---
   bool baroOk = (p_pa > 30000.0f && p_pa < 110000.0f);

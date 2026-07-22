@@ -135,26 +135,26 @@ static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
 };
 static const char* const s_centerMetricAbbrev[CENTER_METRIC_MAX] = { "Thermal Help", "Wind Dir.", "" };
 
-/* ---- Base planeurs (XCSoar) + profils ---- */
+/* ---- Glider polar database + profils ---- */
 typedef struct {
   const char* name;
   int empty_wt; int max_bal;
   int v1; float si1; int v2; float si2; int v3; float si3;
 } GliderData;
-#include "XCSoar_Polars.h"
+#include "GliderPolars.h"
 static GliderData g_gliderDb[300];
 static int g_gliderDbCount = 0;
 static char g_gliderNamesBuf[300 * 32];
 static int g_gliderNamesBufOffset = 0;
 
 static void GliderDB_LoadDefault(void) {
-  g_gliderDbCount = XCSOAR_GLIDERS_COUNT;
+  g_gliderDbCount = GLIDER_POLARS_COUNT;
   g_gliderNamesBufOffset = 0;
   for (int i = 0; i < g_gliderDbCount; i++) {
-    g_gliderDb[i] = XCSOAR_GLIDERS[i];
-    int len = (int)strlen(XCSOAR_GLIDERS[i].name);
+    g_gliderDb[i] = GLIDER_POLARS[i];
+    int len = (int)strlen(GLIDER_POLARS[i].name);
     if (g_gliderNamesBufOffset + len + 1 < (int)sizeof(g_gliderNamesBuf)) {
-      strcpy(&g_gliderNamesBuf[g_gliderNamesBufOffset], XCSOAR_GLIDERS[i].name);
+      strcpy(&g_gliderNamesBuf[g_gliderNamesBufOffset], GLIDER_POLARS[i].name);
       g_gliderDb[i].name = &g_gliderNamesBuf[g_gliderNamesBufOffset];
       g_gliderNamesBufOffset += len + 1;
     }

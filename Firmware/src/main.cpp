@@ -2304,16 +2304,28 @@ static float g_windDirDeg   = NAN;  // LIVE direction D'OU vient le vent (deg, c
 static float g_windAvgSpeed = NAN;  // AVERAGED wind speed (m/s) -- feeds the grey/averaged wind arrow
 static float g_windAvgDir    = NAN; // AVERAGED direction (deg)
 
-// No Kalman covariance exists for the wind estimate (the 4-state Kalman is vario-only,
-// see VarioFusion) -- this is a substitute "confidence" so the display fades a stale
-// estimate instead of hard show/hide. g_windLastTurnMs = millis() of the last completed
-// full turn; g_windTurnCount = how many full turns fed the current estimate (the
-// AVERAGED arrow needs a few turns before it means anything, not just a copy of live).
-static uint32_t g_windLastTurnMs = 0;
-static uint16_t g_windTurnCount  = 0;
-#define WIND_CONF_FRESH_MS   45000UL   // full confidence up to 45 s since the last full turn
-#define WIND_CONF_STALE_MS   90000UL   // faded out completely by 90 s without a new turn
-#define WIND_AVG_MATURE_TURNS    5     // full turns needed for the AVERAGED estimate to be "mature"
+// Arrow size follows wind strength: never shrunk to near-invisible at 0 wind (floor),
+// already at full size well before "a lot of wind" (saturates, doesn't keep growing).
+// LVGL zoom unit: 256 = 100% (native EEZ size).
+#define WIND_ZOOM_MIN         160      // floor size at 0 wind (~62%)
+#define WIND_ZOOM_MAX         256      // full size, reached at/above the saturation speed
+#define WIND_ZOOM_SAT_MS       8.0f    // m/s (~29 km/h) -- speed at which live/avg arrows hit full size
+#define ENERGY_ZOOM_SAT_MAG     6.0f   // g_energyMag (already scale-adjusted) at which the energy arrow hits full size
+
+// Live + avg overlap enough on their own (same pivot); the energy arrow only adds to the
+// clutter for a real signal, so it stays hidden until the drift is clearly non-trivial
+// rather than showing for the slightest wobble (EnergyArrow_Apply's own 0.05 m/s cutoff
+// is just a numerical guard for atan2, not a "worth showing" threshold).
+#define ENERGY_SHOW_MIN         2.0f   // g_energyMag floor to actually display the arrow
+
+// Maps a magnitude to an arrow zoom value, floored at WIND_ZOOM_MIN and saturating at satAt.
+static uint16_t WindArrowZoom(float mag, float satAt)
+{
+  if (isnan(mag) || mag <= 0.0f) return WIND_ZOOM_MIN;
+  float t = mag / satAt;
+  if (t > 1.0f) t = 1.0f;
+  return (uint16_t)(WIND_ZOOM_MIN + t * (WIND_ZOOM_MAX - WIND_ZOOM_MIN));
+}
 
 // Blends a new per-turn wind estimate into a smoothed one (k = blend weight in [0..1]),
 // handling the circular wrap of the direction. Higher k = more reactive.
@@ -2372,13 +2384,6 @@ static void Wind_Apply()
       wind_blend(&g_windAvgSpeed, &g_windAvgDir, newSpeed, newDir, 0.15f);  // AVERAGED (~30 s)
     }
 
-    // Freshness/maturity bookkeeping. A gap longer than the "stale" threshold (left the
-    // thermal, wandered off a while) restarts the maturity count -- the averaged arrow
-    // shouldn't read as "confident" just because it once had 5 good turns 10 minutes ago.
-    bool wasStale = (g_windLastTurnMs == 0) || (now - g_windLastTurnMs >= WIND_CONF_STALE_MS);
-    g_windTurnCount  = wasStale ? 1 : (uint16_t)min(g_windTurnCount + 1, 60000);
-    g_windLastTurnMs = now;
-
     sumEast = sumNorth = sumDt = rotAccum = 0.0f;   // reset for the next turn
   }
 }
@@ -2411,26 +2416,6 @@ static void EnergyArrow_Apply()
   }
 }
 
-// 1.0 = fresh estimate, 0.0 = stale (no full turn completed recently, e.g. left the
-// thermal several minutes ago) -- used to fade the wind display instead of a hard
-// show/hide, so an old estimate doesn't keep pointing confidently at a stale direction.
-static float WindConfidence()
-{
-  if (isnan(g_windSpeedMs) || g_windLastTurnMs == 0) return 0.0f;
-  uint32_t age = millis() - g_windLastTurnMs;
-  if (age <= WIND_CONF_FRESH_MS) return 1.0f;
-  if (age >= WIND_CONF_STALE_MS) return 0.0f;
-  return 1.0f - (float)(age - WIND_CONF_FRESH_MS) / (float)(WIND_CONF_STALE_MS - WIND_CONF_FRESH_MS);
-}
-
-// The AVERAGED (30-60 s) estimate additionally needs a few full turns before it means
-// anything -- freshly seeded (1 turn) it's just a copy of the live estimate, not yet the
-// smoothed reference the energy arrow subtracts against.
-static float WindAvgMaturity()
-{
-  return fminf(1.0f, (float)g_windTurnCount / (float)WIND_AVG_MATURE_TURNS);
-}
-
 // Shows wind direction/speed (2 EEZ labels) only in straight flight with a GPS fix and
 // an estimate available -- symmetric to the Thermal Helper (visible only while circling).
 // The fixed glider + animated arrow (EEZ images to come) will follow the same gating
@@ -2444,19 +2429,14 @@ static void WindDisplay_Update()
   // pas attendre un fix comme condition supplementaire.
   bool show     = (g_menuState == MENU_CLOSED) && !g_setupOpen && !g_circling;
   bool haveWind = !isnan(g_windSpeedMs) && !isnan(g_windDirDeg);
-  // Confidence-based fade (no "---" placeholder yet = full opacity, that state is
-  // legible on its own; once an estimate exists, it fades out as it goes stale rather
-  // than staying at full confidence forever). Floor at ~20% so a stale arrow greys out
-  // instead of vanishing outright (still tells you "wind was roughly there").
-  float   conf     = haveWind ? WindConfidence() : 1.0f;
-  uint8_t liveOpa  = (uint8_t)(50 + conf * 205);
+  // No confidence/maturity fade: shown at full opacity as soon as data is available,
+  // hidden otherwise. A hard show/hide reads more clearly in flight than a slow fade.
   if (objects.lbl_wind_dir) {
     if (show) {
       char b[8];
       if (haveWind) snprintf(b, sizeof(b), "%03.0f\xC2\xB0", g_windDirDeg);   // UTF-8 degree sign (font has glyph 0xB0)
       else          snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_dir, b);
-      lv_obj_set_style_text_opa(objects.lbl_wind_dir, liveOpa, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_clear_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
@@ -2470,41 +2450,49 @@ static void WindDisplay_Update()
         snprintf(b, sizeof(b), "%.0f", spd);
       } else snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_value_speed, b);
-      lv_obj_set_style_text_opa(objects.lbl_wind_value_speed, liveOpa, LV_PART_MAIN | LV_STATE_DEFAULT);
       lv_obj_clear_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
     }
   }
-  if (objects.img_wind_arrow) {
-    if (show) {
-      // Glider always "nose up" -> the arrow rotates relative to the GPS track (same
-      // convention as the Thermal Helper), not to north. Without an estimate
-      // available yet, stays pointing up (angle 0) rather than disappearing.
-      // The arrow points WHERE THE WIND PUSHES (downwind): g_windDirDeg = direction the wind
-      // COMES FROM -> +180 to get the direction it blows toward.
-      float rel = 0.0f;
-      if (haveWind) {
-        rel = g_windDirDeg + 180.0f - g_gpsTrack;
-        while (rel <   0.0f) rel += 360.0f;
-        while (rel >= 360.0f) rel -= 360.0f;
-      }
-      lv_img_set_angle(objects.img_wind_arrow, (int16_t)(rel * 10.0f));  // 0.1 deg / unite LVGL
-      lv_obj_set_style_img_opa(objects.img_wind_arrow, liveOpa, LV_PART_MAIN | LV_STATE_DEFAULT);
-      lv_obj_clear_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
-    } else {
-      lv_obj_add_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
-    }
-  }
+  // The raw LIVE estimate is noisy turn-to-turn and isn't shown on its own (matches
+  // LARUS/LX Hawk): it's only a computation input for the energy arrow below, and its
+  // value/direction are already exposed as text (lbl_wind_dir/lbl_wind_value_speed).
+  if (objects.img_wind_arrow) lv_obj_add_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
   if (objects.img_glider_wind) {
     if (show) lv_obj_clear_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
     else      lv_obj_add_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
   }
 
-  // --- AVG (grey) + ENERGY (yellow) arrows: wired here once the EEZ objects exist ---
-  // (img_wind_arrow_avg / img_wind_arrow_energy -- see chat for the ready block: same
-  // pivot/rotation convention as img_wind_arrow above, gated on WindAvgMaturity() and
-  // g_energyMag respectively.)
+  // AVG (averaged wind) arrow: same pivot/rotation convention as the live arrow above.
+  if (objects.img_wind_arrow_avg) {
+    if (show && haveWind) {
+      float rel = g_windAvgDir + 180.0f - g_gpsTrack;
+      while (rel <   0.0f) rel += 360.0f;
+      while (rel >= 360.0f) rel -= 360.0f;
+      lv_img_set_angle(objects.img_wind_arrow_avg, (int16_t)(rel * 10.0f));
+      lv_img_set_zoom(objects.img_wind_arrow_avg, WindArrowZoom(g_windAvgSpeed, WIND_ZOOM_SAT_MS));
+      lv_obj_clear_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+
+  // ENERGY arrow (Joe Wurts method, see EnergyArrow_Apply): points toward likely lift.
+  // g_energyDir is already the bearing to point TO (no +180 needed, unlike the wind-from
+  // convention above). Hidden while NaN (not enough data yet) or the drift isn't significant.
+  if (objects.img_wind_arrow_energy) {
+    if (show && !isnan(g_energyDir) && !isnan(g_energyMag) && g_energyMag > ENERGY_SHOW_MIN) {
+      float rel = g_energyDir - g_gpsTrack;
+      while (rel <   0.0f) rel += 360.0f;
+      while (rel >= 360.0f) rel -= 360.0f;
+      lv_img_set_angle(objects.img_wind_arrow_energy, (int16_t)(rel * 10.0f));
+      lv_img_set_zoom(objects.img_wind_arrow_energy, WindArrowZoom(g_energyMag, ENERGY_ZOOM_SAT_MAG));
+      lv_obj_clear_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
 }
 
 // Avg climb: moving average of the compensated vario over 15/20/30 s (1 Hz sample, recomputed
@@ -2791,7 +2779,7 @@ static void Vol_Apply()
   if (!g_arcVol || !g_lblVolNum) return;
   bool shouldShow = (g_volShownAt > 0) &&
                     ((millis() - g_volShownAt) < VOL_HIDE_MS) &&
-                    (g_menuState == MENU_CLOSED);  // masque si menu ouvert
+                    (g_menuState == MENU_CLOSED) && !g_setupOpen;  // masque si menu rapide ou setup ouvert
   if (shouldShow) {
     lv_arc_set_value(g_arcVol, g_volume);
     char buf[8]; snprintf(buf, sizeof(buf), "%d", g_volume);

@@ -1239,7 +1239,7 @@ static void MC_Apply(void) {
 
 static void Vol_Apply(void) {
   if (!g_arcVol || !g_lblVolNum) return;
-  bool shouldShow = (g_volShownAt > 0) && ((millis() - g_volShownAt) < VOL_HIDE_MS) && (g_menuState == MENU_CLOSED);
+  bool shouldShow = (g_volShownAt > 0) && ((millis() - g_volShownAt) < VOL_HIDE_MS) && (g_menuState == MENU_CLOSED) && !g_setupOpen;
   if (shouldShow) {
     lv_arc_set_value(g_arcVol, g_volume);
     char buf[8]; snprintf(buf, sizeof(buf), "%d", g_volume);
@@ -1270,8 +1270,30 @@ static volatile bool  g_circling   = false;
 static float g_climbGain    = 0.0f;
 static uint32_t g_takeoffMs = 0;
 static bool     g_inFlight  = true;
-static float g_windSpeedMs = NAN;   /* demo : anime seulement pour previsualiser l'affichage */
+static float g_windSpeedMs  = NAN;   /* demo : anime seulement pour previsualiser l'affichage */
 static float g_windDirDeg   = NAN;
+static float g_windAvgSpeed = NAN;   /* demo : version retardee (1er ordre) du vent live */
+static float g_windAvgDir   = NAN;
+static float g_energyDir    = NAN;   /* demo : meme formule que EnergyArrow_Apply (main.cpp) */
+static float g_energyMag    = NAN;
+
+// Taille des fleches en fonction du vent : jamais quasi-invisible a 0 vent (plancher),
+// deja a taille max bien avant "beaucoup de vent" (sature, ne grossit plus apres).
+// Unite de zoom LVGL : 256 = 100% (taille native EEZ). Memes constantes que main.cpp.
+#define WIND_ZOOM_MIN         160
+#define WIND_ZOOM_MAX         256
+#define WIND_ZOOM_SAT_MS       8.0f
+#define ENERGY_ZOOM_SAT_MAG     6.0f
+#define ENERGY_ARROW_SCALE      3.5f
+#define ENERGY_SHOW_MIN         2.0f   // meme seuil que main.cpp -- cache l'energy tant que la derive n'est pas nette
+
+static uint16_t WindArrowZoom(float mag, float satAt)
+{
+  if (isnan(mag) || mag <= 0.0f) return WIND_ZOOM_MIN;
+  float t = mag / satAt;
+  if (t > 1.0f) t = 1.0f;
+  return (uint16_t)(WIND_ZOOM_MIN + t * (WIND_ZOOM_MAX - WIND_ZOOM_MIN));
+}
 
 /* ============================================================
  *  THERMAL HELPER -- port de Firmware/src/ThermalHelper.{h,cpp} + ThermalDraw.{h,cpp}
@@ -1588,25 +1610,42 @@ static void WindDisplay_Update(void) {
       lv_obj_add_flag(objects.lbl_wind_value_speed, LV_OBJ_FLAG_HIDDEN);
     }
   }
-  if (objects.img_wind_arrow) {
-    if (show) {
-      // Fleche pointe LA OU LE VENT POUSSE (aval) : g_windDirDeg = direction D'OU vient le
-      // vent -> +180 pour le sens aval. Relative au nez du planeur (route GPS).
-      float rel = 0.0f;
-      if (haveWind) {
-        rel = g_windDirDeg + 180.0f - g_gpsTrack;
-        while (rel <   0.0f) rel += 360.0f;
-        while (rel >= 360.0f) rel -= 360.0f;
-      }
-      lv_img_set_angle(objects.img_wind_arrow, (int16_t)(rel * 10.0f));
-      lv_obj_clear_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
-    } else {
-      lv_obj_add_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
-    }
-  }
+  // Le live brut n'est pas affiche seul (comme LARUS/LX Hawk) : bruite tour a tour, il ne
+  // sert que d'entree au calcul energy ci-dessous. Sa valeur reste visible en texte
+  // (lbl_wind_dir/lbl_wind_value_speed).
+  if (objects.img_wind_arrow) lv_obj_add_flag(objects.img_wind_arrow, LV_OBJ_FLAG_HIDDEN);
   if (objects.img_glider_wind) {
     if (show) lv_obj_clear_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
     else      lv_obj_add_flag(objects.img_glider_wind, LV_OBJ_FLAG_HIDDEN);
+  }
+
+  // AVG (retard 1er ordre du vent live, demo uniquement) -- meme convention de rotation.
+  if (objects.img_wind_arrow_avg) {
+    if (show && !isnan(g_windAvgDir)) {
+      float rel = g_windAvgDir + 180.0f - g_gpsTrack;
+      while (rel <   0.0f) rel += 360.0f;
+      while (rel >= 360.0f) rel -= 360.0f;
+      lv_img_set_angle(objects.img_wind_arrow_avg, (int16_t)(rel * 10.0f));
+      lv_img_set_zoom(objects.img_wind_arrow_avg, WindArrowZoom(g_windAvgSpeed, WIND_ZOOM_SAT_MS));
+      lv_obj_clear_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+
+  // ENERGY (difference vectorielle vent live - moyen, demo uniquement) -- meme formule
+  // que EnergyArrow_Apply/main.cpp. g_energyDir est deja le cap A POINTER (pas de +180).
+  if (objects.img_wind_arrow_energy) {
+    if (show && !isnan(g_energyDir) && !isnan(g_energyMag) && g_energyMag > ENERGY_SHOW_MIN) {
+      float rel = g_energyDir - g_gpsTrack;
+      while (rel <   0.0f) rel += 360.0f;
+      while (rel >= 360.0f) rel -= 360.0f;
+      lv_img_set_angle(objects.img_wind_arrow_energy, (int16_t)(rel * 10.0f));
+      lv_img_set_zoom(objects.img_wind_arrow_energy, WindArrowZoom(g_energyMag, ENERGY_ZOOM_SAT_MAG));
+      lv_obj_clear_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);
+    }
   }
 }
 
@@ -1675,6 +1714,42 @@ static void SimMenu_FeedDemoTelemetry(double t) {
 
   if (isnan(g_windSpeedMs)) g_windSpeedMs = 6.0f;   // seed initial (avant toute spirale)
   if (isnan(g_windDirDeg))  g_windDirDeg  = 200.0f;
+
+  // Vitesse de vent animee (0..12 m/s, periode ~20s) : sert uniquement a previsualiser
+  // le zoom des fleches en fonction du vent (pas une regle physique, juste une demo).
+  g_windSpeedMs = 6.0f + 6.0f * (float)sin(t * 0.314159);
+  if (g_windSpeedMs < 0.0f) g_windSpeedMs = 0.0f;
+
+  // AVG = retard 1er ordre du vent live (illustre la moyenne qui "traine" derriere le
+  // live, meme principe que wind_blend/main.cpp mais sans la logique de tour complet).
+  if (isnan(g_windAvgSpeed)) { g_windAvgSpeed = g_windSpeedMs; g_windAvgDir = g_windDirDeg; }
+  else {
+    float k = 0.05f;   // lissage lent -> l'ecart avec le live devient visible en phase B
+    g_windAvgSpeed += (g_windSpeedMs - g_windAvgSpeed) * k;
+    float dd = g_windDirDeg - g_windAvgDir;
+    while (dd > 180.0f)  dd -= 360.0f;
+    while (dd < -180.0f) dd += 360.0f;
+    g_windAvgDir += dd * k;
+    while (g_windAvgDir <   0.0f) g_windAvgDir += 360.0f;
+    while (g_windAvgDir >= 360.0f) g_windAvgDir -= 360.0f;
+  }
+
+  // ENERGY = difference vectorielle live - avg (meme formule que EnergyArrow_Apply/main.cpp).
+  {
+    float dl = (g_windDirDeg + 180.0f) * 0.01745329f;
+    float da = (g_windAvgDir + 180.0f) * 0.01745329f;
+    float eE = g_windSpeedMs * sinf(dl) - g_windAvgSpeed * sinf(da);
+    float eN = g_windSpeedMs * cosf(dl) - g_windAvgSpeed * cosf(da);
+    float mag = sqrtf(eE * eE + eN * eN);
+    g_energyMag = mag * ENERGY_ARROW_SCALE;
+    if (mag > 0.05f) {
+      g_energyDir = atan2f(eE, eN) * 57.29578f;
+      if (g_energyDir < 0.0f) g_energyDir += 360.0f;
+    } else {
+      g_energyDir = NAN;
+    }
+  }
+
   if (g_takeoffMs == 0) g_takeoffMs = millis();
 }
 

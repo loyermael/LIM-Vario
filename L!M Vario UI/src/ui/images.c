@@ -1,6 +1,6 @@
 #include "images.h"
 
-const ext_img_desc_t images[18] = {
+const ext_img_desc_t images[20] = {
     { "arrow_mc", &img_arrow_mc },
     { "arrow_thermal", &img_arrow_thermal },
     { "needle_main", &img_needle_main },
@@ -19,4 +19,6 @@ const ext_img_desc_t images[18] = {
     { "Battery_Med", &img_battery_med },
     { "Battery_Low", &img_battery_low },
     { "Vario_Backroug_Indic", &img_vario_backroug_indic },
+    { "img_wind_arrow_avg", &img_img_wind_arrow_avg },
+    { "img_wind_arrow_energy", &img_img_wind_arrow_energy },
 };

@@ -236,12 +236,20 @@ void GpsLink_Loop(void)
   // 0) PHYSICAL GPS (GPSM10 on UART1) - real-flight source, 10 Hz NMEA
   gpsSerialLoop();
 
-  // 1) CONDOR via USB serial port (PC bench testing bridge; inactive during flight) - auto-detected
+  // 1) CONDOR via USB serial port (PC bench testing bridge; inactive during flight) - auto-detected.
+  // Same dispatch as the UDP path below: '$' = NMEA (Condor's native "NMEA output" COM port,
+  // gives true ground track/speed -> real wind estimation), '=' = key=value (evario/altitude/
+  // compass/airspeed bridge, kept for existing bench setups).
   static char sb[128]; static int sn = 0;
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
-      if (sn > 0) { sb[sn] = 0; if (strchr(sb, '=')) parseCondor(sb); sn = 0; }
+      if (sn > 0) {
+        sb[sn] = 0;
+        if      (sb[0] == '$')    parseNmea(sb);
+        else if (strchr(sb, '=')) parseCondor(sb);
+        sn = 0;
+      }
     } else if (sn < (int)sizeof(sb) - 1) {
       sb[sn++] = c;
     }

@@ -30,7 +30,9 @@ typedef struct _objects_t {
     lv_obj_t *lbl_ib_bas_cent;
     lv_obj_t *lbl_ib_bas_sup;
     lv_obj_t *lbl_ib_bas_inf;
+    lv_obj_t *img_wind_arrow_avg;
     lv_obj_t *img_wind_arrow;
+    lv_obj_t *img_wind_arrow_energy;
     lv_obj_t *img_glider_wind;
     lv_obj_t *lbl_wind_value_speed;
     lv_obj_t *lbl_wind_dir;

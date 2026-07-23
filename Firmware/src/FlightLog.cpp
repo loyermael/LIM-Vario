@@ -101,7 +101,7 @@ RTC_NOINIT_ATTR static char     rtc_path[64];
 
 // Pre-takeoff buffer: 30 s at 10 Hz
 #define PREBUF_LINES   300
-#define LINE_MAX       96
+#define LINE_MAX       256   // wide CSV line (GPS/wind/energy/performance fields)
 
 static File       g_file;
 static bool       g_sdOk      = false;
@@ -151,7 +151,10 @@ static void file_open_new(void)
 
   g_file = SD_MMC.open(path, FILE_WRITE);
   if (!g_file) { Serial.printf("[log] FAILED %s\n", path); return; }
-  g_file.println("ms,p_pa,alt_std_m,vario_baro,vario_fused,accel_vert,volume");
+  g_file.println("ms,p_pa,alt_std_m,alt_gps_m,vario_baro,vario_comp,vario_fused,vario_netto,"
+                  "vario_avg,accel_vert,airspeed_ms,gndspeed_ms,gps_fix,gps_track_deg,"
+                  "circling,turn_dir,wind_speed_ms,wind_dir_deg,windavg_speed_ms,windavg_dir_deg,"
+                  "energy_mag,energy_dir_deg,climb_gain_m,stf_speed_kmh,volume");
 
   // flush the pre-takeoff buffer into the file (the previous 30 s)
   if (g_pre) {
@@ -248,8 +251,30 @@ void FlightLog_AddError(const char* module, const char* msg)
   }
 }
 
-void FlightLog_Tick(float p_pa, float alt_m, float varioBaro,
-                    float varioFused, float accelVert, int volume)
+// Appends one CSV field followed by a comma; NaN -> empty field (not a magic
+// number) so the column stays numeric and "missing" is unambiguous in a
+// spreadsheet/pandas (e.g. wind/GPS fields before a fix or before the first
+// full turn).
+static int csvF(char* buf, size_t cap, float v, int decimals)
+{
+  return isnan(v) ? snprintf(buf, cap, ",") : snprintf(buf, cap, "%.*f,", decimals, v);
+}
+static int csvI(char* buf, size_t cap, int v)
+{
+  return snprintf(buf, cap, "%d,", v);
+}
+
+void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
+                    float varioBaro, float varioComp, float varioFused,
+                    float varioNetto, float varioAvg, float accelVert,
+                    float airspeed_ms, float gndSpeed_ms,
+                    bool gpsFix, float gpsTrack_deg,
+                    bool circling, int turnDir,
+                    float windSpeed_ms, float windDir_deg,
+                    float windAvgSpeed_ms, float windAvgDir_deg,
+                    float energyMag, float energyDir_deg,
+                    float climbGain_m, float stfSpeed_kmh,
+                    int volume)
 {
   if (!g_sdOk || g_srvOn || isnan(alt_m)) return;
   uint32_t now = millis();
@@ -259,9 +284,32 @@ void FlightLog_Tick(float p_pa, float alt_m, float varioBaro,
 
   // ---- CSV line ----
   char line[LINE_MAX];
-  snprintf(line, sizeof(line), "%lu,%.1f,%.1f,%.2f,%.2f,%.2f,%d\n",
-           (unsigned long)now, p_pa, alt_m, varioBaro, varioFused,
-           accelVert, volume);
+  size_t n = 0;
+  n += snprintf(line + n, sizeof(line) - n, "%lu,", (unsigned long)now);
+  n += csvF(line + n, sizeof(line) - n, p_pa, 1);
+  n += csvF(line + n, sizeof(line) - n, alt_m, 1);
+  n += csvF(line + n, sizeof(line) - n, gpsAlt_m, 1);
+  n += csvF(line + n, sizeof(line) - n, varioBaro, 2);
+  n += csvF(line + n, sizeof(line) - n, varioComp, 2);
+  n += csvF(line + n, sizeof(line) - n, varioFused, 2);
+  n += csvF(line + n, sizeof(line) - n, varioNetto, 2);
+  n += csvF(line + n, sizeof(line) - n, varioAvg, 2);
+  n += csvF(line + n, sizeof(line) - n, accelVert, 2);
+  n += csvF(line + n, sizeof(line) - n, airspeed_ms, 2);
+  n += csvF(line + n, sizeof(line) - n, gndSpeed_ms, 2);
+  n += csvI(line + n, sizeof(line) - n, gpsFix ? 1 : 0);
+  n += csvF(line + n, sizeof(line) - n, gpsTrack_deg, 1);
+  n += csvI(line + n, sizeof(line) - n, circling ? 1 : 0);
+  n += csvI(line + n, sizeof(line) - n, turnDir);
+  n += csvF(line + n, sizeof(line) - n, windSpeed_ms, 2);
+  n += csvF(line + n, sizeof(line) - n, windDir_deg, 1);
+  n += csvF(line + n, sizeof(line) - n, windAvgSpeed_ms, 2);
+  n += csvF(line + n, sizeof(line) - n, windAvgDir_deg, 1);
+  n += csvF(line + n, sizeof(line) - n, energyMag, 2);
+  n += csvF(line + n, sizeof(line) - n, energyDir_deg, 1);
+  n += csvF(line + n, sizeof(line) - n, climbGain_m, 1);
+  n += csvF(line + n, sizeof(line) - n, stfSpeed_kmh, 1);
+  n += snprintf(line + n, sizeof(line) - n, "%d\n", volume);
 
   if (!g_flying) {
     // ---- ON THE GROUND: RAM buffer + takeoff detection ----

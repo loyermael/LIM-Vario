@@ -3213,8 +3213,17 @@ void loop()
   // Journal de vol (10 Hz) + serveur WiFi de recuperation
   // Bisection test 2 July 2026: temporarily disabled, freeze still present
   // -> SD/FlightLog innocente, cause = timeout I2C manquant (cf I2C_Driver.cpp). Reactive.
-  FlightLog_Tick(g_pressure, g_altitude, g_vario, g_varioFused,
-                 VarioFusion_GetVertAccel(), g_volume);
+  FlightLog_Tick(g_pressure, g_altitude, g_gpsAlt,
+                 g_vario, g_varioComp, g_varioFused,
+                 g_varioNetto, g_varioAvg, VarioFusion_GetVertAccel(),
+                 g_airspeed, g_gndSpeed,
+                 g_gpsOk, g_gpsTrack,
+                 g_circling, g_turnDir,
+                 g_windSpeedMs, g_windDirDeg,
+                 g_windAvgSpeed, g_windAvgDir,
+                 g_energyMag, g_energyDir,
+                 g_climbGain, g_stfSpeed,
+                 g_volume);
   FlightLog_ServerLoop();
   QrScreen_Tick();   // opens/closes the QR screen per the "App connect" state
 

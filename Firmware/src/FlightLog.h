@@ -13,8 +13,17 @@
 #include <stdbool.h>
 
 void FlightLog_Init(void);
-void FlightLog_Tick(float p_pa, float alt_m, float varioBaro,
-                    float varioFused, float accelVert, int volume);
+void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
+                    float varioBaro, float varioComp, float varioFused,
+                    float varioNetto, float varioAvg, float accelVert,
+                    float airspeed_ms, float gndSpeed_ms,
+                    bool gpsFix, float gpsTrack_deg,
+                    bool circling, int turnDir,
+                    float windSpeed_ms, float windDir_deg,
+                    float windAvgSpeed_ms, float windAvgDir_deg,
+                    float energyMag, float energyDir_deg,
+                    float climbGain_m, float stfSpeed_kmh,
+                    int volume);
 void FlightLog_ServerToggle(void);
 void FlightLog_ServerLoop(void);
 bool FlightLog_ServerActive(void);

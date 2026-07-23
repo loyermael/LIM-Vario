@@ -30,6 +30,8 @@ static WiFiUDP   udp;
 static bool      g_up     = false;
 static float     g_speed  = 0.0f;   // m/s
 static float     g_track  = 0.0f;   // ground track heading in degrees 0..360
+static float     g_lat    = NAN;    // decimal degrees, +N/-S (NAN if never fixed)
+static float     g_lon    = NAN;    // decimal degrees, +E/-W (NAN if never fixed)
 static bool      g_fix    = false;
 static uint32_t  g_lastMs = 0;
 static float     g_cVario   = 0.0f;  // Condor total energy vario (evario, m/s)
@@ -171,6 +173,19 @@ void GpsLink_Begin(void)
   g_up = true;   // Always active: GpsLink_Loop also reads serial port (Condor / USB bridge)
 }
 
+// Converts an NMEA DDMM.MMMM (lat) / DDDMM.MMMM (lon) field to signed decimal
+// degrees. Works for both since dividing by 100 always peels off exactly the
+// last 2 digits as minutes, regardless of how many degree digits precede.
+static float nmeaToDecimal(const char* raw, char hemi)
+{
+  if (!raw || !raw[0]) return NAN;
+  float v   = (float)atof(raw);
+  int   deg = (int)(v / 100.0f);
+  float min = v - deg * 100.0f;
+  float dec = deg + min / 60.0f;
+  return (hemi == 'S' || hemi == 'W') ? -dec : dec;
+}
+
 // Parses an NMEA string (starting with '$'). In-place modification of input buffer.
 static void parseNmea(char* s)
 {
@@ -186,6 +201,8 @@ static void parseNmea(char* s)
       g_fix   = true;
       g_speed = (float)atof(f[7]) * KNOT_TO_MS;
       g_track = (float)atof(f[8]);         // field 8 of RMC = ground track (deg)
+      g_lat   = nmeaToDecimal(f[3], f[4][0]);   // fields 3/4 = lat + N/S
+      g_lon   = nmeaToDecimal(f[5], f[6][0]);   // fields 5/6 = lon + E/W
       g_lastMs = millis();
     }
     // 'V' (invalid/no fix): do NOTHING. The timeout inside GpsLink_HasFix
@@ -273,6 +290,8 @@ void GpsLink_Loop(void)
 bool  GpsLink_HasFix(void)      { return g_fix && (millis() - g_lastMs < 5000); }
 float GpsLink_GroundSpeed(void) { return GpsLink_HasFix() ? g_speed : 0.0f; }
 float GpsLink_Track(void)       { return GpsLink_HasFix() ? g_track : NAN; }
+float GpsLink_Lat(void)         { return GpsLink_HasFix() ? g_lat : NAN; }
+float GpsLink_Lon(void)         { return GpsLink_HasFix() ? g_lon : NAN; }
 
 // --- CONDOR Sim Mode (flight sim UDP key=value stream) ---
 bool  GpsLink_CondorActive(void){ return (millis() - g_condorMs) < 5000; }  // 5 s hold (absorbs WiFi jitter)

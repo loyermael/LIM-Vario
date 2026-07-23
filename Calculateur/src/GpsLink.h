@@ -17,6 +17,8 @@ void     GpsLink_Loop(void);           // Polling routine to call frequently ins
 bool     GpsLink_HasFix(void);         // Returns true if valid GPS fix received recently (<3 s)
 float    GpsLink_GroundSpeed(void);    // Ground speed in m/s (0 if no fix)
 float    GpsLink_Track(void);          // Ground track heading deg 0..360 (NAN if no fix)
+float    GpsLink_Lat(void);            // Latitude, decimal degrees +N/-S (NAN if no fix)
+float    GpsLink_Lon(void);            // Longitude, decimal degrees +E/-W (NAN if no fix)
 
 // --- CONDOR Simulator Mode (Flight sim data stream via UDP "key=val") ---
 void     GpsLink_SetCondorEnabled(bool enabled); // Condor sim toggle (System menu): when false,

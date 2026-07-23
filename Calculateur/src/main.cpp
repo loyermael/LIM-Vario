@@ -375,11 +375,15 @@ void loop() {
   pkt.gnd_speed  = gpsOk ? GpsLink_GroundSpeed() : 0.0f;  // GPS ground speed (screen-side TE comp)
   pkt.gps_alt    = gpsOk ? GpsLink_Altitude() : NAN;      // GPS altitude (separate from baro)
   pkt.gps_track  = gpsOk ? GpsLink_Track() : NAN;   // Ground track heading for circling/wind UI
+  pkt.gps_lat    = gpsOk ? GpsLink_Lat() : NAN;     // Position, for flight log only (no UI use yet)
+  pkt.gps_lon    = gpsOk ? GpsLink_Lon() : NAN;
 #if SIM_VARIO
   gpsOk          = true;           // SIM provides heading + speed -> activates circling mode on display
   pkt.airspeed   = 25.0f;          // Constant airspeed (dV/dt ~ 0, avoids false TE compensation spikes)
   pkt.gnd_speed  = 25.0f;          // Constant -> preserves screen-side TE comp behavior in SIM
   pkt.gps_track  = g_simTrack;     // Rotating heading -> Circling_Apply + thermal helper ring
+  pkt.gps_lat    = NAN;            // SIM has no simulated position
+  pkt.gps_lon    = NAN;
 #endif
   if (g_condorEnabled && GpsLink_CondorActive()) {
     // Pressure coherent with Condor altitude -> display AHRS fusion derives correct climb rate
@@ -388,6 +392,9 @@ void loop() {
     pkt.gnd_speed = 30.0f;         // Constant -> preserves screen-side TE comp behavior in Condor
     pkt.gps_alt   = GpsLink_Altitude();   // Condor altitude
     // pkt.gps_track already assigned from GpsLink_Track() (= compass); gpsOk already true (HasFix)
+    // pkt.gps_lat/lon: only real if Condor's NMEA output feeds position (GpsLink_Lat/Lon already
+    // wired to the same parser as gps_track) -- left as whatever the block above set (NAN if
+    // Condor is only sending compass/airspeed key=value, real if NMEA COM output is used).
   }
   pkt.enc1_count = (ENC1_REVERSE ? -1 : 1) * (int32_t)(enc1.getCount() / 4); // detent steps
   pkt.enc2_count = (ENC2_REVERSE ? -1 : 1) * (int32_t)(enc2.getCount() / 4);

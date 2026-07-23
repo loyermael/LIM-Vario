@@ -15,7 +15,7 @@
 
 #define LIM_SYNC0    0xA5
 #define LIM_SYNC1    0x5A
-#define LIM_VERSION  4           // v4 : added gps_alt + gnd_speed (separate baro/GPS alt and air/ground speed)
+#define LIM_VERSION  5           // v5 : added gps_lat + gps_lon (position, for flight log)
 #define LIM_BAUD     115200      // UART link baud rate (reliable across both ESP32s)
 
 // Flags field bits (Calculator -> Display frame)
@@ -40,6 +40,8 @@ typedef struct {
   float    gps_track;   // ground course (track) in degrees 0..360 (NaN if no fix)
   float    gps_alt;     // GPS altitude in meters (NaN if no fix)
   float    gnd_speed;   // GPS ground speed, same unit as airspeed (0 if no fix)
+  float    gps_lat;     // latitude, decimal degrees +N/-S (NaN if no fix)
+  float    gps_lon;     // longitude, decimal degrees +E/-W (NaN if no fix)
   int32_t  enc1_count;  // cumulative encoder 1 step count
   int32_t  enc2_count;  // cumulative encoder 2 step count
   uint8_t  enc1_btn;    // encoder 1 button state (1 = pressed)

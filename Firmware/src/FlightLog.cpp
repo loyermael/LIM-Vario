@@ -101,7 +101,7 @@ RTC_NOINIT_ATTR static char     rtc_path[64];
 
 // Pre-takeoff buffer: 30 s at 10 Hz
 #define PREBUF_LINES   300
-#define LINE_MAX       256   // wide CSV line (GPS/wind/energy/performance fields)
+#define LINE_MAX       300   // wide CSV line (GPS position/wind/energy/performance fields)
 
 static File       g_file;
 static bool       g_sdOk      = false;
@@ -153,7 +153,8 @@ static void file_open_new(void)
   if (!g_file) { Serial.printf("[log] FAILED %s\n", path); return; }
   g_file.println("ms,p_pa,alt_std_m,alt_gps_m,vario_baro,vario_comp,vario_fused,vario_netto,"
                   "vario_avg,accel_vert,airspeed_ms,gndspeed_ms,gps_fix,gps_track_deg,"
-                  "circling,turn_dir,wind_speed_ms,wind_dir_deg,windavg_speed_ms,windavg_dir_deg,"
+                  "gps_lat,gps_lon,circling,turn_dir,wind_speed_ms,wind_dir_deg,"
+                  "windavg_speed_ms,windavg_dir_deg,"
                   "energy_mag,energy_dir_deg,climb_gain_m,stf_speed_kmh,volume");
 
   // flush the pre-takeoff buffer into the file (the previous 30 s)
@@ -268,7 +269,7 @@ void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
                     float varioBaro, float varioComp, float varioFused,
                     float varioNetto, float varioAvg, float accelVert,
                     float airspeed_ms, float gndSpeed_ms,
-                    bool gpsFix, float gpsTrack_deg,
+                    bool gpsFix, float gpsTrack_deg, float gpsLat, float gpsLon,
                     bool circling, int turnDir,
                     float windSpeed_ms, float windDir_deg,
                     float windAvgSpeed_ms, float windAvgDir_deg,
@@ -299,6 +300,8 @@ void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
   n += csvF(line + n, sizeof(line) - n, gndSpeed_ms, 2);
   n += csvI(line + n, sizeof(line) - n, gpsFix ? 1 : 0);
   n += csvF(line + n, sizeof(line) - n, gpsTrack_deg, 1);
+  n += csvF(line + n, sizeof(line) - n, gpsLat, 6);
+  n += csvF(line + n, sizeof(line) - n, gpsLon, 6);
   n += csvI(line + n, sizeof(line) - n, circling ? 1 : 0);
   n += csvI(line + n, sizeof(line) - n, turnDir);
   n += csvF(line + n, sizeof(line) - n, windSpeed_ms, 2);

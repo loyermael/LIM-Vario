@@ -65,6 +65,8 @@ static volatile float g_varioComp  = 0.0f;   // vario apres compensation GPS (m/
 static volatile float g_airspeed   = 0.0f;   // vitesse AIR (MS4525 ; 0 si pas de pitot)
 static volatile float g_gndSpeed   = 0.0f;   // GPS ground speed (same unit as g_airspeed)
 static volatile float g_gpsAlt     = NAN;    // altitude GPS (m ; NaN si pas de fix)
+static volatile float g_gpsLat     = NAN;    // latitude GPS (deg decimaux, +N/-S ; NaN si pas de fix)
+static volatile float g_gpsLon     = NAN;    // longitude GPS (deg decimaux, +E/-W ; NaN si pas de fix)
 static volatile bool  g_gpsOk      = false;  // flag fix GPS valide (recu du calculateur)
 static volatile float g_gpsTrack   = NAN;    // cap sol GPS (deg 0..360, NaN si pas de fix)
 static volatile bool  g_circling   = false;  // true = spiral detected (else straight flight)
@@ -2057,6 +2059,8 @@ static void Link_Poll()
         g_gpsAlt   = p->gps_alt;
         g_gpsOk    = (p->flags & LIM_FLAG_GPS_OK) != 0;
         g_gpsTrack = p->gps_track;
+        g_gpsLat   = p->gps_lat;
+        g_gpsLon   = p->gps_lon;
         // Reconnection: resync the command state (sink sound + Condor sim) to the calculator
         if (!g_linkOk) {
           Cmd_SendState();
@@ -3217,7 +3221,7 @@ void loop()
                  g_vario, g_varioComp, g_varioFused,
                  g_varioNetto, g_varioAvg, VarioFusion_GetVertAccel(),
                  g_airspeed, g_gndSpeed,
-                 g_gpsOk, g_gpsTrack,
+                 g_gpsOk, g_gpsTrack, g_gpsLat, g_gpsLon,
                  g_circling, g_turnDir,
                  g_windSpeedMs, g_windDirDeg,
                  g_windAvgSpeed, g_windAvgDir,

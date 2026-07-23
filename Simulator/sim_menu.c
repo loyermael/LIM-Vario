@@ -1171,23 +1171,37 @@ static void Menu_LvglSetup(void) {
   lv_obj_set_y(objects.obj6, 176);
   lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 
-  g_arcVol = lv_arc_create(objects.center_hub);
-  lv_obj_set_size(g_arcVol, 180, 180);
-  lv_obj_center(g_arcVol);
-  lv_arc_set_rotation(g_arcVol, 135);
+  // Arc volume compact, deplace dans la zone libre a droite (meme empreinte que la
+  // zone 5 "pod" reservee dans EEZ : ib_frame_5, x=369 y=192, 62x96) au lieu d'un
+  // gros arc au centre de l'ecran qui masquait tout. Parente sur objects.main (plein
+  // ecran, pos 0,0) et non center_hub (344x344 a 68,68) : sinon les coordonnees
+  // absolues tombent hors du parent -> invisible (clip silencieux LVGL).
+  // Retour a lv_arc (l'echelle graduee lv_meter etait illisible a cette taille et
+  // rendait blanc sur blanc) -- juste le chiffre courant au centre, comme avant.
+  // 45 = 135 (ancienne rotation) - 90 (demande).
+  g_arcVol = lv_arc_create(objects.main);
+  lv_obj_set_size(g_arcVol, 65, 65);
+  lv_obj_set_pos(g_arcVol, 368, 208);           // centre ~(400,240)
+  lv_arc_set_rotation(g_arcVol, 45);
   lv_arc_set_bg_angles(g_arcVol, 0, 270);
   lv_arc_set_range(g_arcVol, 0, 20);
   lv_arc_set_value(g_arcVol, g_volume);
   lv_obj_remove_style(g_arcVol, NULL, LV_PART_KNOB);
+  // LVGL donne un fond MAIN opaque blanc par defaut sans theme -- invisible avant (l'arc
+  // etait geant, centre sur la partie claire du cadran), flagrant maintenant qu'il est
+  // petit sur une zone sombre. Transparent : seul l'anneau doit se voir.
+  lv_obj_set_style_bg_opa(g_arcVol, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(g_arcVol, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_arc_color(g_arcVol, lv_color_hex(0xfbd500), LV_PART_INDICATOR | LV_STATE_DEFAULT);
   lv_obj_set_style_arc_color(g_arcVol, lv_color_hex(0x333333), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_arc_width(g_arcVol, 8, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-  lv_obj_set_style_arc_width(g_arcVol, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_arc_width(g_arcVol, 6, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+  lv_obj_set_style_arc_width(g_arcVol, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_clear_flag(g_arcVol, LV_OBJ_FLAG_CLICKABLE);
-  g_lblVolNum = lv_label_create(objects.center_hub);
-  lv_obj_set_style_text_font(g_lblVolNum, &lv_font_montserrat_34, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_text_color(g_lblVolNum, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_center(g_lblVolNum);
+  g_lblVolNum = lv_label_create(objects.main);
+  lv_obj_set_style_bg_opa(g_lblVolNum, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_font(g_lblVolNum, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(g_lblVolNum, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align_to(g_lblVolNum, g_arcVol, LV_ALIGN_CENTER, 0, 0);
   lv_label_set_text(g_lblVolNum, "10");
   lv_obj_add_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
@@ -1230,6 +1244,9 @@ static void Vol_Apply(void) {
     lv_arc_set_value(g_arcVol, g_volume);
     char buf[8]; snprintf(buf, sizeof(buf), "%d", g_volume);
     lv_label_set_text(g_lblVolNum, buf);
+    // Re-centre a chaque changement de texte : sinon decale des que le nombre de
+    // chiffres change (1 chiffre vs 2, ex 5 vs 15).
+    lv_obj_align_to(g_lblVolNum, g_arcVol, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
   } else {
@@ -1255,6 +1272,186 @@ static uint32_t g_takeoffMs = 0;
 static bool     g_inFlight  = true;
 static float g_windSpeedMs = NAN;   /* demo : anime seulement pour previsualiser l'affichage */
 static float g_windDirDeg   = NAN;
+
+/* ============================================================
+ *  THERMAL HELPER -- port de Firmware/src/ThermalHelper.{h,cpp} + ThermalDraw.{h,cpp}
+ *  (memes constantes/algorithme, pas de dependance Arduino -> copie directe en C,
+ *  meme convention que le reste de ce fichier : tout est un port statique de main.cpp,
+ *  pas un partage de compilation avec le vrai firmware).
+ * ============================================================ */
+#define TH_BINS    24
+#define TH_AGE_MS  30000
+#define TH_BLEND   0.30f
+
+static float    s_thBin[TH_BINS];
+static uint32_t s_thBinMs[TH_BINS];
+static int      s_thTurnDir = 0;
+static float    s_thMin = 0.0f, s_thMax = 0.0f, s_thAvg = 0.0f;
+static int      s_thFresh = 0;
+
+static void ThermalHelper_Reset(void) {
+  for (int i = 0; i < TH_BINS; i++) { s_thBin[i] = 0.0f; s_thBinMs[i] = 0; }
+  s_thMin = s_thMax = s_thAvg = 0.0f;
+  s_thFresh = 0; s_thTurnDir = 0;
+}
+
+static void ThermalHelper_Update(float track, float vario, bool circling, int turnDir, uint32_t now) {
+  if (!circling || isnan(track)) { ThermalHelper_Reset(); return; }
+  s_thTurnDir = turnDir;
+  float a = track;
+  while (a >= 360.0f) a -= 360.0f;
+  while (a <  0.0f)   a += 360.0f;
+  int idx = (int)(a / (360.0f / TH_BINS));
+  if (idx < 0) idx = 0; if (idx >= TH_BINS) idx = TH_BINS - 1;
+  if (s_thBinMs[idx] == 0) s_thBin[idx]  = vario;
+  else                     s_thBin[idx] += (vario - s_thBin[idx]) * TH_BLEND;
+  s_thBinMs[idx] = now;
+  float mn = 1e9f, mx = -1e9f, sum = 0.0f; int n = 0;
+  for (int i = 0; i < TH_BINS; i++) {
+    if (s_thBinMs[i] == 0) continue;
+    if (now - s_thBinMs[i] > TH_AGE_MS) { s_thBinMs[i] = 0; continue; }
+    float v = s_thBin[i];
+    if (v < mn) mn = v; if (v > mx) mx = v;
+    sum += v; n++;
+  }
+  if (n > 0) { s_thMin = mn; s_thMax = mx; s_thAvg = sum / (float)n; }
+  else       { s_thMin = s_thMax = s_thAvg = 0.0f; }
+  s_thFresh = n;
+}
+
+static bool ThermalHelper_BinValue(int i, float* out) {
+  if (i < 0 || i >= TH_BINS) return false;
+  if (s_thBinMs[i] == 0) return false;
+  if (out) *out = s_thBin[i];
+  return true;
+}
+
+#define TH_CX        240
+#define TH_CY        240
+#define TH_RING_R    75
+#define TH_DOT_MIN   5
+#define TH_DOT_MAX   20
+#define TH_GLIDER_SZ 70
+#define TH_HALF      (TH_RING_R + TH_DOT_MAX)
+#define TH_LAYER     (2 * TH_HALF)
+#define TH_V_SPAN    3.0f
+#define TH_COL_MAX   0xFBD500
+#define TH_COL_UP    0xE53935
+#define TH_COL_DOWN  0x2196F3
+#define TH_COL_NEUT  0x606060
+#define TH_NEUTRAL   0.25f
+
+typedef struct { int16_t x, y; uint8_t sz; uint32_t col; bool on; } th_dot_t;
+static th_dot_t  s_thDots[TH_BINS];
+static lv_obj_t* s_thLayer  = NULL;
+static lv_obj_t* s_thGlider = NULL;
+
+static void ThermalDraw_layer_cb(lv_event_t* e) {
+  lv_draw_ctx_t* dc = lv_event_get_draw_ctx(e);
+  lv_draw_rect_dsc_t d;
+  lv_draw_rect_dsc_init(&d);
+  d.bg_opa = LV_OPA_COVER;
+  d.radius = LV_RADIUS_CIRCLE;
+  for (int i = 0; i < TH_BINS; i++) {
+    if (!s_thDots[i].on) continue;
+    int s = s_thDots[i].sz;
+    d.bg_color = lv_color_hex(s_thDots[i].col);
+    lv_area_t a;
+    a.x1 = s_thDots[i].x - s / 2; a.y1 = s_thDots[i].y - s / 2;
+    a.x2 = a.x1 + s - 1; a.y2 = a.y1 + s - 1;
+    lv_draw_rect(dc, &d, &a);
+  }
+}
+
+/* Masque le planeur statique pose par EEZ (img_glider_th) et cree le planeur/anneau
+ * geres a l'execution -- meme fixup que ThermalDraw_Init() dans le vrai firmware. */
+static void ThermalDraw_Init(lv_obj_t* parent) {
+  uint32_t nch = lv_obj_get_child_cnt(parent);
+  for (uint32_t i = 0; i < nch; i++) {
+    lv_obj_t* ch = lv_obj_get_child(parent, i);
+    if (lv_obj_check_type(ch, &lv_img_class) &&
+        lv_img_get_src(ch) == (const void*)&img_glider_th) {
+      lv_obj_add_flag(ch, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  s_thLayer = lv_obj_create(parent);
+  lv_obj_remove_style_all(s_thLayer);
+  lv_obj_set_pos(s_thLayer, TH_CX - TH_HALF, TH_CY - TH_HALF);
+  lv_obj_set_size(s_thLayer, TH_LAYER, TH_LAYER);
+  lv_obj_clear_flag(s_thLayer, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(s_thLayer, ThermalDraw_layer_cb, LV_EVENT_DRAW_MAIN_END, NULL);
+  lv_obj_add_flag(s_thLayer, LV_OBJ_FLAG_HIDDEN);
+  for (int i = 0; i < TH_BINS; i++) s_thDots[i].on = false;
+  s_thGlider = lv_img_create(parent);
+  lv_img_set_src(s_thGlider, &img_glider_th);
+  lv_obj_clear_flag(s_thGlider, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_flag(s_thGlider, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void ThermalDraw_Update(bool circling, int turnDir, float track) {
+  static uint32_t last = 0;
+  static float    lastThetaG = -1.0f;
+  static bool     active = false;
+  static float    lastTrackDrawn = NAN;
+  static int      lastTurnDrawn  = 99;
+  uint32_t now = millis();
+  if (now - last < 100) return;
+  last = now;
+
+  if (!circling || isnan(track)) {
+    if (active) {
+      for (int i = 0; i < TH_BINS; i++) s_thDots[i].on = false;
+      lv_obj_add_flag(s_thLayer,  LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(s_thGlider, LV_OBJ_FLAG_HIDDEN);
+      active = false; lastThetaG = -1.0f; lastTrackDrawn = NAN;
+    }
+    return;
+  }
+
+  bool justActivated = false;
+  if (!active) { lv_obj_clear_flag(s_thLayer, LV_OBJ_FLAG_HIDDEN); active = true; justActivated = true; }
+
+  if (!justActivated && !isnan(lastTrackDrawn) &&
+      turnDir == lastTurnDrawn && fabsf(track - lastTrackDrawn) < 0.5f) {
+    return;
+  }
+  lastTrackDrawn = track; lastTurnDrawn = turnDir;
+
+  int idxMax = -1; float vMax = -1e9f;
+  for (int i = 0; i < TH_BINS; i++) {
+    float v; if (!ThermalHelper_BinValue(i, &v)) continue;
+    if (v > vMax) { vMax = v; idxMax = i; }
+  }
+
+  float thetaG = (turnDir < 0) ? 90.0f : 270.0f;
+  const float binW = 360.0f / TH_BINS;
+  for (int i = 0; i < TH_BINS; i++) {
+    float v;
+    if (!ThermalHelper_BinValue(i, &v)) { s_thDots[i].on = false; continue; }
+    float t = fabsf(v) / TH_V_SPAN;
+    if (t > 1) t = 1;
+    int sz = TH_DOT_MIN + (int)(t * (TH_DOT_MAX - TH_DOT_MIN));
+    uint32_t col;
+    if      (i == idxMax && v > TH_NEUTRAL) col = TH_COL_MAX;
+    else if (v >  TH_NEUTRAL) col = TH_COL_UP;
+    else if (v < -TH_NEUTRAL) col = TH_COL_DOWN;
+    else                      col = TH_COL_NEUT;
+    float th = ((i + 0.5f) * binW - track + thetaG) * 0.01745329f;
+    s_thDots[i].x  = TH_CX + (int)(TH_RING_R * sinf(th));
+    s_thDots[i].y  = TH_CY - (int)(TH_RING_R * cosf(th));
+    s_thDots[i].sz = (uint8_t)sz; s_thDots[i].col = col; s_thDots[i].on = true;
+  }
+  lv_obj_invalidate(s_thLayer);
+
+  if (thetaG != lastThetaG) {
+    float r = thetaG * 0.01745329f;
+    int gx = TH_CX + (int)(TH_RING_R * sinf(r));
+    int gy = TH_CY - (int)(TH_RING_R * cosf(r));
+    lv_obj_set_pos(s_thGlider, gx - TH_GLIDER_SZ / 2, gy - TH_GLIDER_SZ / 2);
+    lv_obj_clear_flag(s_thGlider, LV_OBJ_FLAG_HIDDEN);
+    lastThetaG = thetaG;
+  }
+}
 
 static void Comp_Apply(void) {
   static uint64_t lastUs = 0;
@@ -1372,7 +1569,7 @@ static void WindDisplay_Update(void) {
   if (objects.lbl_wind_dir) {
     if (show) {
       char b[8];
-      if (haveWind) snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      if (haveWind) snprintf(b, sizeof(b), "%03.0f\xC2\xB0", g_windDirDeg);   // UTF-8 degree sign (font has glyph 0xB0)
       else          snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_dir, b);
       lv_obj_clear_flag(objects.lbl_wind_dir, LV_OBJ_FLAG_HIDDEN);
@@ -1420,13 +1617,64 @@ static void SimMenu_FeedDemoTelemetry(double t) {
   g_airspeed   = 0.0f;                          /* pas de pitot simule -> vitesse sol utilisee */
   g_gndSpeed   = 26.0f + 4.0f * (float)sin(t * 0.05);   /* m/s (~94 km/h) comme le vrai calc */
   g_gpsOk      = true;
-  g_gpsTrack   = fmodf((float)(t * 8.0), 360.0f);
-  g_circling   = (fmod(t, 40.0) < 15.0);
-  /* Demo uniquement : le vrai calcul (derive GPS en spirale) n'existe que sur le vrai
-   * firmware (main.cpp, Wind_Apply). Ici on anime juste pour previsualiser l'affichage
-   * en vol droit (cache pendant la spirale, comme le vrai gating WindDisplay_Update). */
-  g_windSpeedMs = 5.0f + 1.5f * (float)sin(t * 0.03);   /* m/s (~18-23 km/h) */
-  g_windDirDeg   = fmodf((float)(t * 3.0), 360.0f);
+
+  // Cycle de 40s : 15s de spirale (anneau Thermal Helper, sens alterne a chaque
+  // spirale) puis 25s de vol droit, decoupe en DEUX phases qui isolent chacune des
+  // deux regles independamment (rel = windDir + 180 - track) :
+  //   Phase A (12s) : cap qui varie (correction/derive), vent FIGE
+  //                   -> seule la fleche bouge, le chiffre ne bouge PAS.
+  //   Phase B (13s) : cap FIGE, vent qui tourne
+  //                   -> la fleche ET le chiffre bougent ensemble.
+  static double lastT         = -1.0;
+  static bool   wasCircling   = false;
+  static float  dirSign       = 1.0f;    // +1 = virage a droite, -1 = a gauche
+  static int    spiralCount   = 0;
+  static float  s_sfHeadingBase = 0.0f;  // cap au sortir de la spirale (centre du wobble phase A)
+  static bool   s_sfBEntered    = false; // deja entre en phase B pour ce passage en vol droit ?
+  static float  s_sfBHeading    = 0.0f;  // cap fige pendant la phase B
+  static float  s_sfBWindBase   = 200.0f;// vent au debut de la phase B (avant rotation)
+  double dt = (lastT < 0.0) ? 0.0 : (t - lastT);
+  if (dt < 0.0 || dt > 1.0) dt = 0.0;    // ignore un saut d'horloge (ex: fenetre deplacee)
+  lastT = t;
+
+  double cyclePos = fmod(t, 40.0);
+  bool circlingNow = (cyclePos < 15.0);
+  g_circling = circlingNow;
+
+  if (circlingNow) {
+    if (!wasCircling) { dirSign = (spiralCount % 2 == 0) ? 1.0f : -1.0f; spiralCount++; }
+    g_gpsTrack += dirSign * 24.0f * (float)dt;   // ~24 deg/s -> un tour plein en 15s
+    while (g_gpsTrack >= 360.0f) g_gpsTrack -= 360.0f;
+    while (g_gpsTrack <    0.0f) g_gpsTrack += 360.0f;
+  } else {
+    if (wasCircling) {   // on vient de sortir de la spirale : (re)demarre la phase A
+      s_sfHeadingBase = g_gpsTrack;
+      s_sfBEntered    = false;
+    }
+    double sfT = cyclePos - 15.0;   // 0..25 dans le vol droit
+    if (sfT < 12.0) {
+      // Phase A : le vent ne bouge pas (g_windDirDeg/g_windSpeedMs inchanges depuis la
+      // derniere spirale) ; seul le cap oscille (+/-20 deg, periode 8s, simule une
+      // correction de route) -> la fleche suit le cap, le chiffre reste immobile.
+      g_gpsTrack = s_sfHeadingBase + 20.0f * sinf((float)sfT * 45.0f * 0.01745329f);
+    } else {
+      // Phase B : cap fige (la ou le wobble de la phase A s'est arrete) ; le vent
+      // tourne (15 deg/s) -> fleche ET chiffre bougent ensemble.
+      if (!s_sfBEntered) {
+        s_sfBHeading  = g_gpsTrack;
+        s_sfBWindBase = g_windDirDeg;
+        s_sfBEntered  = true;
+      }
+      g_gpsTrack   = s_sfBHeading;
+      g_windDirDeg = fmodf((float)(s_sfBWindBase + (sfT - 12.0) * 15.0), 360.0f);
+    }
+    while (g_gpsTrack >= 360.0f) g_gpsTrack -= 360.0f;
+    while (g_gpsTrack <    0.0f) g_gpsTrack += 360.0f;
+  }
+  wasCircling = circlingNow;
+
+  if (isnan(g_windSpeedMs)) g_windSpeedMs = 6.0f;   // seed initial (avant toute spirale)
+  if (isnan(g_windDirDeg))  g_windDirDeg  = 200.0f;
   if (g_takeoffMs == 0) g_takeoffMs = millis();
 }
 
@@ -1526,6 +1774,7 @@ void SimMenu_Init(void) {
   SetupMenu_Init();
   Menu_LvglSetup();
   Labels_Init();
+  ThermalDraw_Init(objects.main);   // masque le planeur statique EEZ + cree l'anneau/planeur geres
 }
 
 void SimMenu_Tick(double t) {
@@ -1538,6 +1787,24 @@ void SimMenu_Tick(double t) {
   MC_Apply();
   Vol_Apply();
   Labels_Apply();
+
+  // Sens de virage demo : signe du delta de cap depuis le tick precedent (meme principe
+  // que Circling_Apply/g_turnDir dans main.cpp, simplifie -- pas besoin du seuil/hold
+  // complet ici, g_circling est deja pilote par SimMenu_FeedDemoTelemetry).
+  static float s_thPrevTrack = NAN;
+  int thTurnDir = 0;
+  if (!isnan(s_thPrevTrack)) {
+    float d = g_gpsTrack - s_thPrevTrack;
+    while (d > 180.0f)  d -= 360.0f;
+    while (d < -180.0f) d += 360.0f;
+    if      (d >  0.05f) thTurnDir = +1;
+    else if (d < -0.05f) thTurnDir = -1;
+  }
+  s_thPrevTrack = g_gpsTrack;
+  ThermalHelper_Update(g_gpsTrack, g_varioComp, g_circling, thTurnDir, millis());
+  ThermalDraw_Update((g_menuState == MENU_CLOSED) && !g_setupOpen && g_circling && g_helperEnable,
+                      thTurnDir, g_gpsTrack);
+
   WindDisplay_Update();
   Menu_Apply();
   SetupMenu_Apply();

@@ -221,7 +221,7 @@ void create_screen_main() {
             // img_glider_wind
             lv_obj_t *obj = lv_img_create(parent_obj);
             objects.img_glider_wind = obj;
-            lv_obj_set_pos(obj, 135, 160);
+            lv_obj_set_pos(obj, 148, 148);
             lv_obj_set_size(obj, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
             lv_img_set_src(obj, &img_img_glider_wind);
         }

@@ -94,7 +94,7 @@ static bool     g_inFlight   = false; // flight state (takeoff / landing detecti
 #define VARIO_PERIOD_FAST   150       // ms : ~6 bips/s a VMAX
 #define VARIO_DUTY_ON       0.50f     // 50% bip / 50% silence (plus audible)
 
-// Volume arc (shown temporarily in the hub when enc2 turns)
+// Volume arc (shown temporarily in the free right-side zone when enc2 turns)
 static lv_obj_t*  g_arcVol     = NULL;   // l'arc LVGL
 static lv_obj_t*  g_lblVolNum  = NULL;   // the number at the center of the arc
 static uint32_t   g_volShownAt = 0;      // timestamp du dernier changement
@@ -2104,25 +2104,38 @@ static void Menu_LvglSetup()
   lv_obj_set_y(objects.obj6, 176);   // "Mute/Full" → meme ligne
   lv_obj_add_flag(objects.quick_menu_panel, LV_OBJ_FLAG_HIDDEN);
 
-  // --- Volume arc in the central hub ---
-  g_arcVol = lv_arc_create(objects.center_hub);
-  lv_obj_set_size(g_arcVol, 180, 180);
-  lv_obj_center(g_arcVol);
-  lv_arc_set_rotation(g_arcVol, 135);          // starts at bottom-left
+  // --- Volume arc: compact (65x65), in the free right-side zone (same footprint as
+  // the reserved "pod" info-box zone 5 / ib_frame_5 in EEZ: x=369 y=192, 62x96) instead
+  // of a big arc dead-center of the screen. Back to lv_arc (lv_meter's tick scale was
+  // unreadable at this size and rendered white-on-white) -- just the current value as
+  // a number in the center, like before.
+  // Parented to objects.main (full 480x480, pos 0,0), NOT center_hub: center_hub is
+  // only 344x344 at (68,68), so absolute-screen coordinates landed outside its bounds
+  // (clipped -> invisible) when it was the parent. ---
+  g_arcVol = lv_arc_create(objects.main);
+  lv_obj_set_size(g_arcVol, 65, 65);
+  lv_obj_set_pos(g_arcVol, 368, 208);          // centre ~(400,240), zone libre a droite
+  lv_arc_set_rotation(g_arcVol, 45);           // 135 - 90 (rotation demandee)
   lv_arc_set_bg_angles(g_arcVol, 0, 270);      // arc de 270 degres
   lv_arc_set_range(g_arcVol, 0, 20);
   lv_arc_set_value(g_arcVol, g_volume);
   lv_obj_remove_style(g_arcVol, NULL, LV_PART_KNOB); // pas de poignee
+  // LVGL donne un fond MAIN opaque blanc par defaut sans theme -- invisible avant (l'arc
+  // etait geant, centre sur la partie claire du cadran), flagrant maintenant qu'il est
+  // petit sur une zone sombre. Le rendre transparent : seul l'anneau doit se voir.
+  lv_obj_set_style_bg_opa(g_arcVol, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_border_width(g_arcVol, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_set_style_arc_color(g_arcVol, lv_color_hex(0xfbd500), LV_PART_INDICATOR | LV_STATE_DEFAULT); // jaune
   lv_obj_set_style_arc_color(g_arcVol, lv_color_hex(0x333333), LV_PART_MAIN | LV_STATE_DEFAULT);      // fond gris
-  lv_obj_set_style_arc_width(g_arcVol, 8, LV_PART_INDICATOR | LV_STATE_DEFAULT);
-  lv_obj_set_style_arc_width(g_arcVol, 8, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_arc_width(g_arcVol, 6, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+  lv_obj_set_style_arc_width(g_arcVol, 6, LV_PART_MAIN | LV_STATE_DEFAULT);
   lv_obj_clear_flag(g_arcVol, LV_OBJ_FLAG_CLICKABLE);
-  // Chiffre au centre
-  g_lblVolNum = lv_label_create(objects.center_hub);
-  lv_obj_set_style_text_font(g_lblVolNum, &lv_font_montserrat_34, LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_set_style_text_color(g_lblVolNum, lv_color_hex(0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
-  lv_obj_center(g_lblVolNum);
+  // Chiffre au centre de l'arc (pas du parent, vu qu'il n'est plus au milieu de l'ecran)
+  g_lblVolNum = lv_label_create(objects.main);
+  lv_obj_set_style_bg_opa(g_lblVolNum, LV_OPA_TRANSP, LV_PART_MAIN | LV_STATE_DEFAULT);   // idem : pas de boite blanche derriere le texte
+  lv_obj_set_style_text_font(g_lblVolNum, &lv_font_montserrat_24, LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_set_style_text_color(g_lblVolNum, lv_color_hex(0x1f333e), LV_PART_MAIN | LV_STATE_DEFAULT);
+  lv_obj_align_to(g_lblVolNum, g_arcVol, LV_ALIGN_CENTER, 0, 0);
   lv_label_set_text(g_lblVolNum, "50");
   // Cache par defaut
   lv_obj_add_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
@@ -2440,7 +2453,7 @@ static void WindDisplay_Update()
   if (objects.lbl_wind_dir) {
     if (show) {
       char b[8];
-      if (haveWind) snprintf(b, sizeof(b), "%03.0f", g_windDirDeg);
+      if (haveWind) snprintf(b, sizeof(b), "%03.0f\xC2\xB0", g_windDirDeg);   // UTF-8 degree sign (font has glyph 0xB0)
       else          snprintf(b, sizeof(b), "---");
       lv_label_set_text(objects.lbl_wind_dir, b);
       lv_obj_set_style_text_opa(objects.lbl_wind_dir, liveOpa, LV_PART_MAIN | LV_STATE_DEFAULT);
@@ -2783,6 +2796,9 @@ static void Vol_Apply()
     lv_arc_set_value(g_arcVol, g_volume);
     char buf[8]; snprintf(buf, sizeof(buf), "%d", g_volume);
     lv_label_set_text(g_lblVolNum, buf);
+    // Re-centre a chaque changement de texte : aligner une seule fois a l'init laisse
+    // le label decale des que le nombre de chiffres change (1 chiffre vs 2, ex 5 vs 15).
+    lv_obj_align_to(g_lblVolNum, g_arcVol, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
   } else {

@@ -88,8 +88,12 @@ extern uint8_t g_centerConfigCruise;
 #define TAKEOFF_CONFIRM_MS 4000UL    // deviation must hold this long before we actually open a file
                                      // (rejects single-sample baro/GPS glitches and ground handling bumps)
 #define LANDED_BAND_M        8.0f   // "still" altitude band
+#define LANDED_SPEED_MS      2.8f  // ~10 km/h -- "still" ground/air speed (same threshold as
+                                    // FlightTime_Apply() in main.cpp, kept in sync on purpose)
 #define LANDED_HOLD_MS  180000UL  // 3 min stable => landed
 #define GROUND_TAU_S      30.0f   // ground reference smoothing
+#define SD_ERR_THROTTLE_MS 10000UL // min interval between repeated SD error log entries
+#define OPEN_RETRY_MS        5000UL // retry interval if the log file failed to open in flight
 
 // Survives watchdog / brownout resets (not a full power cycle) -- lets us
 // resume logging into the SAME file instead of starting a new one when the
@@ -117,6 +121,10 @@ static float    g_groundRef   = NAN;   // ground reference altitude
 static float    g_anchorAlt   = NAN;   // stability anchor (in flight)
 static uint32_t g_anchorMs    = 0;
 static uint32_t g_takeoffCandMs = 0;   // 0 = no takeoff candidate in progress
+
+// SD reliability bookkeeping
+static uint32_t g_lastSdErrMs    = 0;  // throttle for repeated write-failure log entries
+static uint32_t g_lastOpenRetryMs = 0; // throttle for re-attempting file_open_new() in flight
 
 // pre-takeoff ring buffer
 // Pre-takeoff ring buffer (300 lines): ~28 KB placed in PSRAM and NOT in
@@ -150,7 +158,11 @@ static void file_open_new(void)
   }
 
   g_file = SD_MMC.open(path, FILE_WRITE);
-  if (!g_file) { Serial.printf("[log] FAILED %s\n", path); return; }
+  if (!g_file) {
+    Serial.printf("[log] FAILED %s\n", path);
+    FlightLog_AddError("SD", "failed to open new log file (card full, removed or corrupt?)");
+    return;
+  }
   g_file.println("ms,p_pa,alt_std_m,alt_gps_m,vario_baro,vario_comp,vario_fused,vario_netto,"
                   "vario_avg,accel_vert,airspeed_ms,gndspeed_ms,gps_fix,gps_track_deg,"
                   "gps_lat,gps_lon,circling,turn_dir,wind_speed_ms,wind_dir_deg,"
@@ -188,6 +200,21 @@ void FlightLog_Init(void)
 {
   g_sdOk = (SD_MMC.cardType() != CARD_NONE);
   if (!g_sdOk) Serial.println("[log] no SD card: logging disabled");
+
+  // Low-space warning at boot: a 10 Hz, ~200 B/line CSV eats roughly 7 MB per
+  // flight hour. Below 50 MB free (< ~7 h logging left) we still log, but the
+  // pilot has a record of it in ERRORS.LOG in case the card fills up mid-season.
+  if (g_sdOk) {
+    uint64_t totalMB = SD_MMC.totalBytes() / (1024ULL * 1024ULL);
+    uint64_t usedMB  = SD_MMC.usedBytes()  / (1024ULL * 1024ULL);
+    uint64_t freeMB  = (totalMB > usedMB) ? (totalMB - usedMB) : 0;
+    Serial.printf("[log] SD: %llu/%llu MB free\n", (unsigned long long)freeMB, (unsigned long long)totalMB);
+    if (freeMB < 50) {
+      char msg[48];
+      snprintf(msg, sizeof(msg), "low SD space: %llu MB free", (unsigned long long)freeMB);
+      FlightLog_AddError("SD", msg);
+    }
+  }
 
   // Pre-takeoff buffer in PSRAM (frees ~28 KB of internal RAM for WiFi).
   g_pre = (char (*)[LINE_MAX])heap_caps_malloc((size_t)PREBUF_LINES * LINE_MAX,
@@ -265,6 +292,19 @@ static int csvI(char* buf, size_t cap, int v)
   return snprintf(buf, cap, "%d,", v);
 }
 
+// Throttled error log: a sustained SD fault (card pulled mid-flight, full
+// card) would otherwise write ERRORS.LOG at 10 Hz, which just adds more
+// failing I/O on top of the original problem. One entry per SD_ERR_THROTTLE_MS
+// is enough for the pilot to know something went wrong, without hammering
+// a card that may already be in trouble.
+static void sd_error(const char* msg)
+{
+  uint32_t now = millis();
+  if (g_lastSdErrMs != 0 && now - g_lastSdErrMs < SD_ERR_THROTTLE_MS) return;
+  g_lastSdErrMs = now;
+  FlightLog_AddError("SD", msg);
+}
+
 void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
                     float varioBaro, float varioComp, float varioFused,
                     float varioNetto, float varioAvg, float accelVert,
@@ -314,6 +354,10 @@ void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
   n += csvF(line + n, sizeof(line) - n, stfSpeed_kmh, 1);
   n += snprintf(line + n, sizeof(line) - n, "%d\n", volume);
 
+  // Same convention as FlightTime_Apply() in main.cpp: airspeed (pitot) takes
+  // priority when available, GPS ground speed otherwise.
+  float spd = (!isnan(airspeed_ms) && airspeed_ms > 5.0f) ? airspeed_ms : gndSpeed_ms;
+
   if (!g_flying) {
     // ---- ON THE GROUND: RAM buffer + takeoff detection ----
     if (g_pre) {
@@ -345,17 +389,40 @@ void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
   } else {
     // ---- EN VOL : ecriture + detection atterrissage ----
     if (g_file) {
-      g_file.print(line);
+      size_t written = g_file.print(line);
+      if (written != strlen(line)) {
+        // Short/failed write: card full, removed, or a transient SD_MMC
+        // hiccup. We keep the handle open and keep trying every tick (most
+        // causes are transient); this just makes the failure visible instead
+        // of silently truncating the flight log.
+        sd_error("short or failed write to log file (card full or removed?)");
+      }
       if (now - g_lastFlush >= LOG_FLUSH_MS) {
         g_lastFlush = now;
         g_file.flush();
       }
+    } else if (now - g_lastOpenRetryMs >= OPEN_RETRY_MS) {
+      // The file failed to open at takeoff (or the handle was lost): retry
+      // periodically instead of silently logging nothing for the whole flight.
+      g_lastOpenRetryMs = now;
+      sd_error("no open log file in flight, retrying open");
+      file_open_new();
     }
-    if (isnan(g_anchorAlt) || fabsf(alt_m - g_anchorAlt) > LANDED_BAND_M) {
-      g_anchorAlt = alt_m;          // ca bouge encore : on re-arme
+
+    // Landing = altitude AND speed both settled. Speed alone would miss a
+    // landing on a perfectly flat/no-wind day; altitude alone would false-
+    // trigger on a long altitude-holding glide (ridge/wave soaring at cruise
+    // speed) -- 3 min stable in a real thermal/ridge situation is common, but
+    // 3 min stable AND under ~10 km/h essentially only happens on the ground.
+    // If no speed source is available (NaN), we fall back to the pure-
+    // altitude check rather than never detecting landing at all.
+    bool speedKnown = !isnan(spd);
+    bool tooFast     = speedKnown && (spd > LANDED_SPEED_MS);
+    if (isnan(g_anchorAlt) || fabsf(alt_m - g_anchorAlt) > LANDED_BAND_M || tooFast) {
+      g_anchorAlt = alt_m;          // ca bouge encore (altitude ou vitesse) : on re-arme
       g_anchorMs  = now;
     } else if (now - g_anchorMs > LANDED_HOLD_MS) {
-      file_close();                  // 3 min immobile : atterri
+      file_close();                  // 3 min immobile (alt + vitesse) : atterri
       g_flying        = false;
       g_groundRef     = alt_m;
       g_preCount      = 0;

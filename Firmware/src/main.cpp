@@ -2254,13 +2254,19 @@ static void Circling_Apply()
   const float    TURN_THRESH   = 6.0f;   // deg/s au-dela = on tourne
   const uint32_t ENTER_HOLD_MS = 4000;   // entrer en spirale (reactif)
   const uint32_t EXIT_HOLD_MS  = 10000;  // sortir : plus long -> ne quitte pas trop tot
+  // A l'arret, le bruit de position GPS fait deriver le cap de plusieurs deg/s : sans
+  // garde-fou de vitesse, ca declenche une fausse spirale et Wind_Apply integre du bruit.
+  // Seuil largement au-dessus du bruit sol, largement sous la vitesse sol d'une vraie
+  // spirale meme avec vent fort (cf. LANDED_SPEED_MS=2.8 dans FlightLog.cpp, ici plus strict).
+  const float    MIN_SPEED_MS  = 8.0f;   // m/s (~29 km/h)
 
   uint32_t now  = millis();
   uint32_t dtMs = now - lastMs;
   if (dtMs < 1000) return;               // echantillonnage 1 Hz
   lastMs = now;
 
-  if (!g_gpsOk || isnan(g_gpsTrack)) {   // pas de fix -> vol droit
+  // pas de fix, ou trop lent pour voler -> vol droit (et cap GPS non fiable)
+  if (!g_gpsOk || isnan(g_gpsTrack) || isnan(g_gndSpeed) || g_gndSpeed < MIN_SPEED_MS) {
     g_circling = false;
     g_turnDir  = 0;
     prevTrack = NAN; enterMs = exitMs = 0;

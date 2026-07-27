@@ -32,6 +32,8 @@ static float     g_speed  = 0.0f;   // m/s
 static float     g_track  = 0.0f;   // ground track heading in degrees 0..360
 static float     g_lat    = NAN;    // decimal degrees, +N/-S (NAN if never fixed)
 static float     g_lon    = NAN;    // decimal degrees, +E/-W (NAN if never fixed)
+static int       g_numSat = 0;      // satellites used, from GGA field 7 (0 if no GGA received yet)
+static int       g_fixQuality = 0;  // GGA field 6: 0=none, 1=GPS, 2=DGPS, 4=RTK fixed, 5=RTK float
 static bool      g_fix    = false;
 static uint32_t  g_lastMs = 0;
 static float     g_cVario   = 0.0f;  // Condor total energy vario (evario, m/s)
@@ -191,7 +193,8 @@ static void parseNmea(char* s)
 {
   bool isRmc = (strncmp(s + 3, "RMC", 3) == 0);
   bool isVtg = (strncmp(s + 3, "VTG", 3) == 0);
-  if (!isRmc && !isVtg) return;
+  bool isGga = (strncmp(s + 3, "GGA", 3) == 0);
+  if (!isRmc && !isVtg && !isGga) return;
 
   char* f[16]; int n = 0; char* p = s;
   while (p && n < 16) { f[n++] = p; p = strchr(p, ','); if (p) *p++ = 0; }
@@ -213,6 +216,12 @@ static void parseNmea(char* s)
     // as soon as mobile app streams packets, even without satellite acquisition).
     g_speed = (float)atof(f[5]) * KNOT_TO_MS;
     g_track = (float)atof(f[1]);           // field 1 of VTG = true ground track (deg)
+  } else if (isGga && n > 7) {
+    // GGA field 6 = fix quality, field 7 = satellite count. Kept independent of the
+    // RMC 'A'/'V' validity flag: satellite count is informative (e.g. "0 sat" explains
+    // a stuck fix) even while RMC still reports no valid fix.
+    g_fixQuality = atoi(f[6]);
+    g_numSat     = atoi(f[7]);
   }
 }
 
@@ -292,6 +301,10 @@ float GpsLink_GroundSpeed(void) { return GpsLink_HasFix() ? g_speed : 0.0f; }
 float GpsLink_Track(void)       { return GpsLink_HasFix() ? g_track : NAN; }
 float GpsLink_Lat(void)         { return GpsLink_HasFix() ? g_lat : NAN; }
 float GpsLink_Lon(void)         { return GpsLink_HasFix() ? g_lon : NAN; }
+// Not gated by GpsLink_HasFix(): satellite count/quality are diagnostic (e.g. "0 sat, quality 0"
+// explains WHY there's no fix yet), unlike position/speed which must not be trusted without one.
+int   GpsLink_NumSat(void)      { return g_numSat; }
+int   GpsLink_FixQuality(void)  { return g_fixQuality; }
 
 // --- CONDOR Sim Mode (flight sim UDP key=value stream) ---
 bool  GpsLink_CondorActive(void){ return (millis() - g_condorMs) < 5000; }  // 5 s hold (absorbs WiFi jitter)

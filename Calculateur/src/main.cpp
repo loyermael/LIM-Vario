@@ -37,11 +37,11 @@
 
 // SPEAKER TEST: when BMP sensor is missing, injects synthetic vertical velocity
 // to verify acoustic tone generation. 0 = off (avoids overriding Condor/real vario).
-#define SOUND_TEST 0
+#define SOUND_TEST 1
 
 // Encoder rotation inversion: 1 = inverted direction
-#define ENC1_REVERSE 1
-#define ENC2_REVERSE 1
+#define ENC1_REVERSE 0
+#define ENC2_REVERSE 0
 
 // WiFi GPS AP bridge: 0 = disabled (no AP broadcast). 1 = active.
 #define GPS_WIFI 1
@@ -130,6 +130,9 @@ void setup() {
 
   // --- Acoustic Vario Synthesizer ---
   varioSound.begin();
+#if SOUND_TEST
+  sndVol = 12;  // Forced audible level for bench speaker test (bypasses ENC2 volume state)
+#endif
   varioSound.setVolume(sndVol);
   varioSound.setSinkAlarm(false);
 
@@ -326,13 +329,15 @@ void loop() {
     // No valid sensor read -> default to zero (never propagate NaN which would glitch display needle)
     vario_f = vario_te = vario_int = 0.0f;
     alt_f = 0.0f;
-#if SOUND_TEST
-    // SPEAKER TEST: oscillating synthetic vario (-1.5 .. +2.5 m/s over ~8 s period)
-    // -> audible ascending beep cadence followed by silence.
-    float testVz = 0.5f + 2.0f * sinf(6.2832f * (millis() % 8000) / 8000.0f);
-    varioSound.setVz(testVz);
-#endif
   }
+
+#if SOUND_TEST
+  // BENCH SPEAKER TEST: unconditional oscillating synthetic vario (-1.5 .. +2.5 m/s over ~8 s
+  // period), overrides whatever setVz() call happened above -> isolates the audio path
+  // (I2S/MAX98357A/speaker) from sensor + display-link state.
+  float testVz = 0.5f + 2.0f * sinf(6.2832f * (millis() % 8000) / 8000.0f);
+  varioSound.setVz(testVz);
+#endif
 
 #if SIM_VARIO
   // Force simulated thermal vario (bypasses baro smoothing) -> clean sound + telemetry packet
@@ -411,10 +416,16 @@ void loop() {
   static uint32_t lastPrint = 0;
   if (millis() - lastPrint >= 100) {
     lastPrint = millis();
-    Serial.printf("vario=%+5.2f | CONDOR=%d cv=%+5.2f trk=%5.1f alt=%6.1f | RSSI=%d dBm\n",
-                  vario_te,
+    // DEBUG bug "vario qui monte doucement au sol" : spd_f = airspeed MS4525 filtree,
+    // vario_f = vario purement barometrique (avant compensation TE). Si spd_f derive
+    // lentement alors que vario_f est stable -> c'est le MS4525 ; si vario_f derive
+    // aussi -> derive barometrique du BMP388.
+    Serial.printf("vario=%+5.2f baro=%+5.2f spd=%5.2f | CONDOR=%d cv=%+5.2f trk=%5.1f alt=%6.1f | RSSI=%d dBm | gps sat=%d q=%d | enc1_raw=%ld enc2_raw=%ld\n",
+                  vario_te, vario_f, spd_f,
                   GpsLink_CondorActive() ? 1 : 0, GpsLink_Vario(),
                   GpsLink_Track(), GpsLink_Altitude(),
-                  GpsLink_RSSI());
+                  GpsLink_RSSI(),
+                  GpsLink_NumSat(), GpsLink_FixQuality(),
+                  (long)enc1.getCount(), (long)enc2.getCount());
   }
 }

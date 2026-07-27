@@ -19,6 +19,8 @@ float    GpsLink_GroundSpeed(void);    // Ground speed in m/s (0 if no fix)
 float    GpsLink_Track(void);          // Ground track heading deg 0..360 (NAN if no fix)
 float    GpsLink_Lat(void);            // Latitude, decimal degrees +N/-S (NAN if no fix)
 float    GpsLink_Lon(void);            // Longitude, decimal degrees +E/-W (NAN if no fix)
+int      GpsLink_NumSat(void);         // Satellites used in fix (from GGA, 0 if no GGA yet)
+int      GpsLink_FixQuality(void);     // GGA fix quality: 0=none, 1=GPS, 2=DGPS, 4=RTK fixed, 5=RTK float
 
 // --- CONDOR Simulator Mode (Flight sim data stream via UDP "key=val") ---
 void     GpsLink_SetCondorEnabled(bool enabled); // Condor sim toggle (System menu): when false,

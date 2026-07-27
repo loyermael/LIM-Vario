@@ -102,8 +102,15 @@ void setup() {
   Wire.begin(PIN_SDA, PIN_SCL);
   delay(100);             // Allow I2C bus lines to stabilize
   Wire.setClock(100000);  // 100kHz standard mode
-  bmpOk = bmp.begin_I2C(0x77);
-  if (!bmpOk) bmpOk = bmp.begin_I2C(0x76);
+  // Single-shot probes used to fail outright whenever the bus (or a marginal connection)
+  // wasn't quite ready at this exact instant, latching bmpOk/hasSpeed false for the whole
+  // session even though the sensor works fine a few hundred ms later. Retry loop absorbs
+  // that startup race; it does NOT fix a genuinely bad/intermittent physical connection.
+  for (int attempt = 0; attempt < 5 && !bmpOk; attempt++) {
+    if (attempt > 0) delay(100);
+    bmpOk = bmp.begin_I2C(0x77);
+    if (!bmpOk) bmpOk = bmp.begin_I2C(0x76);
+  }
   if (bmpOk) {
     bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_2X);
     bmp.setPressureOversampling(BMP3_OVERSAMPLING_8X);
@@ -115,7 +122,10 @@ void setup() {
   }
 
   // --- MS4525 Airspeed Sensor (Auto-detected) ---
-  hasSpeed = ms4525.begin();
+  for (int attempt = 0; attempt < 5 && !hasSpeed; attempt++) {
+    if (attempt > 0) delay(100);
+    hasSpeed = ms4525.begin();
+  }
   Serial.println(hasSpeed ? "MS4525 present -> TE compensation active"
                           : "MS4525 absent -> uncompensated baro vario");
 
@@ -290,12 +300,30 @@ void loop() {
 #endif
 
   // --- MS4525 Airspeed Sensor -> true airspeed (if present) ---
+  // Zero-offset calibration: MS4525 breakout boards commonly carry a small raw
+  // differential-pressure bias at rest (part-to-part manufacturing spread, see
+  // the warning in MS4525DO.h). Uncorrected, this reads as a nonzero airspeed
+  // while stationary -> on the display side, FlightTime_Apply() mistakes a
+  // sustained >11 m/s reading for a takeoff even on the ground. Learned as an
+  // EMA of dp_pa during the same 2 s post-boot stabilization window already
+  // used for the baro, assuming the glider is stationary (no wind on the
+  // pitot) at power-on.
+  static float dp_zero = 0.0f;
   float spd_raw = 0.0f;
   if (hasSpeed) {
     float dp_pa, t2;
     if (ms4525.read(dp_pa, t2)) {
+      if (millis() - bootMs < 2000) dp_zero = ema(dp_zero, dp_pa, dt, 0.40f);
       float rho = p_pa / (R_AIR * (tempC + 273.15f));
-      spd_raw = MS4525DO::airspeed_ms(dp_pa, rho);
+      spd_raw = MS4525DO::airspeed_ms(dp_pa - dp_zero, rho);
+      // Dead-band below the sensor's own noise floor: sqrt(dp) rectifies zero-mean
+      // pressure noise into a small but nonzero *positive* speed (the negative half
+      // of the noise is clamped to 0 by airspeed_ms, the positive half isn't) ->
+      // reads as a phantom 1-2 km/h at rest even after zero-offset calibration.
+      // 1.5 m/s (~5.4 km/h) is well under any operational threshold (TE switch at
+      // 5 m/s, takeoff at 11 m/s in FlightTime_Apply), so clamping it away here is
+      // display cleanliness, not a functional fix.
+      if (spd_raw < 1.5f) spd_raw = 0.0f;
     }
   }
 

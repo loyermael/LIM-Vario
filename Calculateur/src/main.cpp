@@ -107,6 +107,30 @@ static bool TryInitBmp() {
   return ok;
 }
 
+// Frees a slave that is holding SDA low. Happens when the ESP32 resets (flash, watchdog,
+// brownout) mid-transfer: the slave was clocking out a byte whose current bit is 0, keeps
+// SDA down waiting for the clocks that never come, and every later Wire call fails -> the
+// sensor looks permanently absent even though it is fine (observed on the bench: SDA stuck
+// at 0 with 0/127 addresses answering, recovered by this exact sequence). Bit-banging 9
+// clocks lets it finish the byte, then a manual STOP releases the bus.
+// Must run BEFORE Wire.begin() takes over the pins.
+static void I2C_BusRecover() {
+  pinMode(PIN_SDA, INPUT_PULLUP);
+  pinMode(PIN_SCL, INPUT_PULLUP);
+  delayMicroseconds(500);
+  if (digitalRead(PIN_SDA) == HIGH) return;            // bus already idle
+  Serial.println("[i2c] SDA held low -> bus recovery");
+  pinMode(PIN_SCL, OUTPUT);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(PIN_SCL, LOW);  delayMicroseconds(5);
+    digitalWrite(PIN_SCL, HIGH); delayMicroseconds(5);
+  }
+  pinMode(PIN_SDA, OUTPUT); digitalWrite(PIN_SDA, LOW); delayMicroseconds(5);
+  pinMode(PIN_SCL, INPUT_PULLUP);                       delayMicroseconds(5);
+  pinMode(PIN_SDA, INPUT_PULLUP);                       delayMicroseconds(5);  // rising SDA while SCL high = STOP
+  Serial.printf("[i2c] recovery %s\n", digitalRead(PIN_SDA) == HIGH ? "OK" : "FAILED");
+}
+
 void setup() {
   Serial.begin(115200);                                   // USB debug serial port
   Serial2.begin(LIM_BAUD, SERIAL_8N1, LINK_RX, LINK_TX);  // Inter-processor UART link to display
@@ -114,6 +138,7 @@ void setup() {
   Serial.println("\n=== L!M Vario - Calculator Unit V0.9 ===");
 
   // --- I2C + BMP388 Barometric Sensor ---
+  I2C_BusRecover();
   Wire.begin(PIN_SDA, PIN_SCL);
   delay(100);             // Allow I2C bus lines to stabilize
   Wire.setClock(100000);  // 100kHz standard mode

@@ -37,7 +37,7 @@
 
 // SPEAKER TEST: when BMP sensor is missing, injects synthetic vertical velocity
 // to verify acoustic tone generation. 0 = off (avoids overriding Condor/real vario).
-#define SOUND_TEST 1
+#define SOUND_TEST 0
 
 // Encoder rotation inversion: 1 = inverted direction
 #define ENC1_REVERSE 0

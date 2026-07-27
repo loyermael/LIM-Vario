@@ -326,9 +326,13 @@ void loop() {
     // so the beep matches the needle); fall back to local baro TE if the link is stale.
     varioSound.setVz(MasterVario_Fresh() ? g_masterVario : vario_te);
   } else {
-    // No valid sensor read -> default to zero (never propagate NaN which would glitch display needle)
+    // No valid sensor read -> vario to zero (never propagate NaN which would glitch display needle).
+    // alt_f to NaN (not 0.0f): a transient BMP388 read failure must not fake a ground-level
+    // altitude here, or the next valid read computes vario_raw=(real_alt-0)/dt -> a huge false
+    // spike that the 20s integrator then bleeds off over several seconds (reads as "climbing on
+    // its own"). NaN re-anchors alt_f to the real altitude via the isnan() check above instead.
     vario_f = vario_te = vario_int = 0.0f;
-    alt_f = 0.0f;
+    alt_f = NAN;
   }
 
 #if SOUND_TEST

@@ -92,6 +92,21 @@ static inline float ema(float val, float cible, float dt, float tau) {
   return val + a * (cible - val);
 }
 
+// One probe attempt (both possible addresses) + config on success. Shared between the
+// boot-time retry loop and the hot-reconnect retry in loop(), so the oversampling/filter
+// config can't drift out of sync between the two call sites.
+static bool TryInitBmp() {
+  bool ok = bmp.begin_I2C(0x77);
+  if (!ok) ok = bmp.begin_I2C(0x76);
+  if (ok) {
+    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_2X);
+    bmp.setPressureOversampling(BMP3_OVERSAMPLING_8X);
+    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
+    bmp.setOutputDataRate(BMP3_ODR_50_HZ);
+  }
+  return ok;
+}
+
 void setup() {
   Serial.begin(115200);                                   // USB debug serial port
   Serial2.begin(LIM_BAUD, SERIAL_8N1, LINK_RX, LINK_TX);  // Inter-processor UART link to display
@@ -108,18 +123,9 @@ void setup() {
   // that startup race; it does NOT fix a genuinely bad/intermittent physical connection.
   for (int attempt = 0; attempt < 5 && !bmpOk; attempt++) {
     if (attempt > 0) delay(100);
-    bmpOk = bmp.begin_I2C(0x77);
-    if (!bmpOk) bmpOk = bmp.begin_I2C(0x76);
+    bmpOk = TryInitBmp();
   }
-  if (bmpOk) {
-    bmp.setTemperatureOversampling(BMP3_OVERSAMPLING_2X);
-    bmp.setPressureOversampling(BMP3_OVERSAMPLING_8X);
-    bmp.setIIRFilterCoeff(BMP3_IIR_FILTER_COEFF_3);
-    bmp.setOutputDataRate(BMP3_ODR_50_HZ);
-    Serial.println("BMP388 OK");
-  } else {
-    Serial.println("!! BMP388 NOT FOUND");
-  }
+  Serial.println(bmpOk ? "BMP388 OK" : "!! BMP388 NOT FOUND");
 
   // --- MS4525 Airspeed Sensor (Auto-detected) ---
   for (int attempt = 0; attempt < 5 && !hasSpeed; attempt++) {
@@ -218,6 +224,20 @@ static void Cmd_Poll() {
 }
 
 void loop() {
+  // Hot-reconnect: a sensor plugged back in mid-session does NOT retrigger begin() on its
+  // own (it's only called at boot) -> a currently-absent sensor would stay "NOT FOUND" for
+  // the rest of the session even once the wiring is fixed. Re-probe every 3 s until it
+  // succeeds; harmless once bmpOk/hasSpeed are true (the check short-circuits immediately).
+  if (!bmpOk || !hasSpeed) {
+    static uint32_t lastRetryMs = 0;
+    uint32_t nowMs = millis();
+    if (nowMs - lastRetryMs >= 3000) {
+      lastRetryMs = nowMs;
+      if (!bmpOk && TryInitBmp())     { bmpOk = true;    Serial.println("BMP388 OK (hot reconnect)"); }
+      if (!hasSpeed && ms4525.begin()){ hasSpeed = true;  Serial.println("MS4525 present (hot reconnect) -> TE compensation active"); }
+    }
+  }
+
   // Poll incoming feedback commands from display unit (Sink Sound toggle, acoustic setup)
   Cmd_Poll();
 

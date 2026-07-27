@@ -12,9 +12,16 @@ uint8_t I2C_Read_EXIO(uint8_t REG)                             // Read the value
     printf("The I2C transmission fails. - I2C Read EXIO\r\n");
   }
   Wire.requestFrom(TCA9554_ADDRESS, 1);
-  uint8_t bitsStatus;
+  // Was left uninitialized when the read failed (bus timeout / NACK) -> returned a stack
+  // garbage value that Set_EXIO() then used as the output-bit mask and wrote straight back
+  // to the expander. Those pins drive the panel reset (EXIO_PIN1) and CS (EXIO_PIN3), so a
+  // single I2C hiccup could silently scramble the display while the CPU kept running fine.
+  // Falling back to the last known-good shadow keeps the write a no-op instead.
+  static uint8_t s_lastGood = 0;
+  uint8_t bitsStatus = s_lastGood;
   if (Wire.available()) {
     bitsStatus = Wire.read();
+    s_lastGood = bitsStatus;
   }
   if (g_i2cMutex) xSemaphoreGive(g_i2cMutex);
   return bitsStatus;

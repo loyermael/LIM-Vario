@@ -258,6 +258,32 @@ static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
   "STF Cmd"
 };
 
+// Same list, for zone 5 (the 62px pod) only: s_ibMetricAbbrev doesn't fit that frame at
+// all (e.g. "Inst. Vario", "MacCready", "Flight Time" would clip/overflow) -- every other
+// zone's editor frame is wide enough for the normal abbreviations, so only the pod needs
+// this shorter set. Kept to <=5 chars, same order/index as s_ibMetricAbbrev/IBIT_LIST.
+static const char* const s_ibMetricAbbrevTiny[IB_METRIC_MAX] = {
+  "Vario",   // Inst. Vario
+  "AvgV",    // Avg. Vario
+  "MC",      // MacCready
+  "Alt",     // Baro Alt.
+  "GAlt",    // GPS Alt.
+  "IAS",     // Airspeed
+  "GS",      // Gnd Speed
+  "Time",    // Time
+  "FTime",   // Flight Time
+  "Wind",    // Wind
+  "Gain",    // Climb Gain
+  "FL",      // Flight Lvl
+  "L/D",     // Glide Ratio
+  "",        // (disabled)
+  "Netto",   // Netto
+  "STF",     // STF
+  "Alert",   // Alerts
+  "Mode",    // Mode
+  "SCmd"     // STF Cmd
+};
+
 static const char* const s_centerMetricAbbrev[CENTER_METRIC_MAX] = {
   "Thermal Help",
   "Wind Dir.",
@@ -568,7 +594,7 @@ enum { ST_SUB, ST_TOGGLE, ST_VALUE, ST_CHOICE, ST_INFO, ST_BACK };
 enum { SET_NONE, SET_HELPER, SET_BRIGHT, SET_VOLUME, SET_SINK, SET_LOGGER, SET_CONDOR, SET_RANGE,
        SET_ROT, SET_U_VERT, SET_U_ALT, SET_U_SPEED, SET_PITCH, SET_WAVE, SET_SPREAD,
        SET_VFILTER, SET_VAVG, SET_UPDATE, SET_CONDORSIM, SET_FWVER, SET_BUILD, SET_LINKVER, SET_CREATOR, SET_ALGO,
-       SET_APPCONNECT, SET_RESET_CFG, SET_FACTORY_RESET,
+       SET_APPCONNECT, SET_SHOW_QR, SET_RESET_CFG, SET_FACTORY_RESET,
        SET_GLIDER_MODEL, SET_GLIDER_EMPTY_WT, SET_GLIDER_MAX_BAL, SET_GLIDER_V1, SET_GLIDER_SI1, SET_GLIDER_V2, SET_GLIDER_SI2, SET_GLIDER_V3, SET_GLIDER_SI3,
        SET_PROFILE_SELECT, SET_PROFILE_EDIT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
 
@@ -587,6 +613,7 @@ static const SmItem SIT[]  = { {"Tone pitch",ST_VALUE,SET_PITCH},{"Waveform",ST_
 static const SmItem DIT[]  = { {"Info boxes",ST_SUB,SM_INFOBOX},{"Units",ST_SUB,SM_UNITS},{"Brightness",ST_VALUE,SET_BRIGHT},{"Screen rot.",ST_CHOICE,SET_ROT},{"Back",ST_BACK,0} };
 static const SmItem SYIT[] = {
   {"App connect",   ST_TOGGLE, SET_APPCONNECT},
+  {"Show QR Code",  ST_INFO,   SET_SHOW_QR},
   {"Condor sim",    ST_TOGGLE, SET_CONDORSIM},
   {"Reset config",  ST_INFO,   SET_RESET_CFG},
   {"Factory reset", ST_INFO,   SET_FACTORY_RESET},
@@ -607,13 +634,20 @@ static const SmItem IBIT_MODE[] = {
 // .arg = the ACTUAL InfoBoxMetric enum value (not the list index) -> read via it->arg,
 // never via the raw g_smSel (see off-by-one bug fixed on 2 July 2026: Ground Speed
 // missing from the list shifted everything else by one).
+// Order MUST match the visual EEZ row order (infobox_list, ibname0.., see s_ibListNames
+// wiring in InfoBox_ShowSelect/InfoBox_RenderSelect) -- selecting an item stores it->arg
+// directly from this array position, so a mismatch here silently swaps what gets saved
+// vs what the pilot thinks they picked (2 July 2026 off-by-one, recurred 28 July 2026 when
+// Alerts/Mode/Disabled were added in EEZ without updating this list to match).
+// Netto and STF Command deliberately left out for now (IB_NETTO/IB_STF_CMD stay valid
+// enum values and Labels_Apply() already renders them -- just not selectable here yet,
+// no EEZ row exists for them).
 static const SmItem IBIT_LIST[] = {
   {"Inst. Vario", ST_INFO, IB_VARIO_INST}, {"Avg. Vario", ST_INFO, IB_VARIO_INT}, {"MacCready", ST_INFO, IB_MACCREADY},
   {"Baro Alt.", ST_INFO, IB_ALT_BARO}, {"GPS Alt.", ST_INFO, IB_ALT_GPS}, {"Time", ST_INFO, IB_TIME},
   {"Flight Time", ST_INFO, IB_FLIGHT_TIME}, {"Wind", ST_INFO, IB_WIND}, {"Climb Gain", ST_INFO, IB_CLIMB_GAIN},
   {"Flight Level", ST_INFO, IB_FLIGHT_LVL}, {"Glide Ratio", ST_INFO, IB_GLIDE}, {"Airspeed", ST_INFO, IB_AIRSPEED},
-  {"Ground Speed", ST_INFO, IB_GND_SPEED},
-  {"Netto", ST_INFO, IB_NETTO}, {"Speed to Fly", ST_INFO, IB_STF}, {"STF Command", ST_INFO, IB_STF_CMD},
+  {"Ground Speed", ST_INFO, IB_GND_SPEED}, {"Speed to Fly", ST_INFO, IB_STF},
   {"Alerts", ST_INFO, IB_ALERTS}, {"Mode", ST_INFO, IB_MODE},
   {"Disabled", ST_INFO, IB_EMPTY},
   {"Back", ST_BACK, 0}
@@ -645,8 +679,8 @@ static const SmItem PRIT[] = {
 
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
-  {"System",SYIT,6},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,17}
+  {"System",SYIT,7},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,18}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -664,8 +698,8 @@ static lv_obj_t* s_sName[4] = {0};   // sous-menu Sound : sname0..sname2 + Back 
 static lv_obj_t* s_sVal[4]  = {0};   // values sval0..sval2 ([3]=Back with no value)
 static lv_obj_t* s_vName[4] = {0};   // sous-menu Vario : vname0..vname2 + Back (vname3)
 static lv_obj_t* s_vVal[4]  = {0};   // values vval0/vval1/vval2 ([3]=Back with no value)
-static lv_obj_t* s_syName[6] = {0};  // sous-menu System : syname0,1,3_,4,5,6 (Back)
-static lv_obj_t* s_syVal[6]  = {0};  // syval0 (App connect), syval1 (Condor), reste NULL
+static lv_obj_t* s_syName[7] = {0};  // sous-menu System : syname0,2,1,3_,4,5,6 (Back)
+static lv_obj_t* s_syVal[7]  = {0};  // syval0 (App connect), syval1 (Condor, index 2), reste NULL
 static lv_obj_t* s_abName[4] = {0};  // about_list: abname0,1,2,abname5(Back)
 static lv_obj_t* s_abVal[4]  = {0};  // abval0,1,2, NULL(Back)
 static lv_obj_t* s_glName[10] = {0}; // sous-menu Glider info
@@ -718,12 +752,17 @@ static void Profile_SelectNext(int d) {
   Profile_Load(g_profileIdx);
 }
 static lv_obj_t* s_imName[3] = {0}; static lv_obj_t* s_imVal[3] = {0};
-static lv_obj_t* s_ibListNames[15] = {0}; static lv_obj_t* s_ibListVals[15] = {0};
+static lv_obj_t* s_ibListNames[18] = {0}; static lv_obj_t* s_ibListVals[18] = {0};
 static lv_obj_t* s_ciListNames[4] = {0}; static lv_obj_t* s_ciListVals[4] = {0};
 
 // Etat de confirmation (reset config / factory reset)
 static int8_t   g_smConfirm  = -1;   // -1=inactif ; SET_RESET_CFG ou SET_FACTORY_RESET
 static bool     g_confirmSel = false; // false=Non (defaut, securitaire), true=Oui
+static bool     g_infoOpen   = false; // popup d'info a un seul bouton (ex: "Profile saved"),
+                                       // reutilise le panneau confirm_panel/confirm_msg avec
+                                       // Oui/Non/selection masques -- pas de nouvel objet EEZ
+static uint32_t g_infoShownMs = 0;    // timestamp d'ouverture -> auto-fermeture (Info_Tick)
+#define INFO_POPUP_MS 1800             // duree d'affichage avant fermeture automatique
 static lv_obj_t* s_confirmPanel = NULL;
 static lv_obj_t* s_confirmMsg   = NULL;
 static lv_obj_t* s_confirmYes   = NULL;
@@ -1063,7 +1102,7 @@ static void InfoBox_RenderSelect() {
       } else {
         int mIdx = g_infoBoxConfig[i];
         if (mIdx >= IB_METRIC_MAX) mIdx = IB_EMPTY;
-        lv_label_set_text(s_ibValLabels[i], s_ibMetricAbbrev[mIdx]);
+        lv_label_set_text(s_ibValLabels[i], (i == 5) ? s_ibMetricAbbrevTiny[mIdx] : s_ibMetricAbbrev[mIdx]);
       }
       // Center the label (EEZ position = corner, not center) on its frame, whatever
       // the length of the displayed text (existing objects -> no freeze risk).
@@ -1092,10 +1131,13 @@ static void InfoBox_CloseEdit() {
   IBDBG("[IB] CloseEdit done\n");
 }
 
+static void Info_Show(const char* msg);   // forward decl: defined below (info popup), used here
+static void Info_Hide();
 static void SetupMenu_Open()  { g_setupOpen = true; g_menuState = MENU_CLOSED; g_menuDirty = true;
                                 g_smMenu = SM_ROOT; g_smSel = 0; g_smDepth = 0; g_smEdit = false; g_smDirty = true; }
 static void SetupMenu_Close() {
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); }
+  if (g_infoOpen) Info_Hide();
   if (g_ibEditState != IBEDIT_NONE) { InfoBox_CloseEdit(); }
   // Profile name editor (New/Save/Edit): without this, a long-press while typing
   // would close the whole setup, leaving the editor shown and unreachable forever
@@ -1104,6 +1146,7 @@ static void SetupMenu_Close() {
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
 static void SetupMenu_Back()  {
+  if (g_infoOpen) { Info_Hide(); return; }
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); g_smDirty = true; return; }
   if (g_smMenu == SM_INFOBOX_METRIC || g_ibEditState == IBEDIT_CHOOSE_METRIC) {
     IBDBG("[IB] Back: METRIC -> SELECT_ZONE\n");
@@ -1155,6 +1198,40 @@ static void Confirm_Hide() {
   if (s_confirmPanel) lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN);
   g_smDirty = true;
 }
+// One-button info popup ("Profile saved" etc.): same confirm_panel/confirm_msg as
+// Confirm_Show, Yes/No/selection just hidden instead of wired to a choice. Dismissed by
+// a single ENC1 press or long-press, see the g_infoOpen checks in SetupMenu_Press/LongPress.
+static void Info_Show(const char* msg) {
+  g_infoOpen = true;
+  g_infoShownMs = millis();
+  if (s_confirmMsg) {
+    lv_label_set_text(s_confirmMsg, msg);
+    // No Yes/No row below to leave room for -> center in the panel instead of the
+    // Confirm_Show position (which sits high, y=25, to clear the buttons at y=96).
+    // Info_Hide() restores the original position for the next real Confirm_Show.
+    lv_obj_align(s_confirmMsg, LV_ALIGN_CENTER, 0, 0);
+  }
+  if (s_confirmYes) lv_obj_add_flag(s_confirmYes, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmNo)  lv_obj_add_flag(s_confirmNo,  LV_OBJ_FLAG_HIDDEN);
+  if (objects.confirm_panel_selection) lv_obj_add_flag(objects.confirm_panel_selection, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmPanel) { lv_obj_clear_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); lv_obj_move_foreground(s_confirmPanel); }
+}
+static void Info_Hide() {
+  g_infoOpen = false;
+  // Restores Yes/No/selection/message position for the next real Confirm_Show.
+  if (s_confirmMsg) lv_obj_set_pos(s_confirmMsg, -41, 25);   // EEZ-authored position
+  if (s_confirmYes) lv_obj_clear_flag(s_confirmYes, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmNo)  lv_obj_clear_flag(s_confirmNo,  LV_OBJ_FLAG_HIDDEN);
+  if (objects.confirm_panel_selection) lv_obj_clear_flag(objects.confirm_panel_selection, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmPanel) lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN);
+  g_smDirty = true;
+}
+// Auto-closes the info popup after INFO_POPUP_MS -- unlike Confirm_Show (destructive
+// actions, must stay until the pilot picks Yes/No), a pure acknowledgement like "Profile
+// saved" shouldn't need a click to dismiss.
+static void Info_Tick() {
+  if (g_infoOpen && millis() - g_infoShownMs > INFO_POPUP_MS) Info_Hide();
+}
 static void SetupMenu_Rotate(long d) {
   if (s_pnContainer) {
     if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
@@ -1172,6 +1249,7 @@ static void SetupMenu_Rotate(long d) {
     ProfileName_Render();
     return;
   }
+  if (g_infoOpen) return;   // nothing to select in a one-button info popup
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
     // Rotation order: 0,1,2,3,4,5,6 (zone 5 = status pod, activated 19 July 2026;
@@ -1196,6 +1274,7 @@ static void SetupMenu_Rotate(long d) {
   }
   g_smDirty = true;
 }
+static void QrScreen_Show();   // forward decl: defined later (QR CODE SCREEN section), used below
 static void SetupMenu_Press() {
   if (s_pnContainer) {
     if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
@@ -1205,6 +1284,7 @@ static void SetupMenu_Press() {
     ProfileName_Render();
     return;
   }
+  if (g_infoOpen) { Info_Hide(); return; }
   if (g_smConfirm != -1) {
     if (g_confirmSel) {
       if (g_smConfirm == (int8_t)SET_RESET_CFG) {
@@ -1303,12 +1383,28 @@ static void SetupMenu_Press() {
     case ST_VALUE:
     case ST_CHOICE: g_smEdit = true; break;
     case ST_INFO:
-      if (it->arg == SET_PROFILE_SAVE || it->arg == SET_PROFILE_NEW || it->arg == SET_PROFILE_EDIT) {
+      if (it->arg == SET_PROFILE_NEW || it->arg == SET_PROFILE_EDIT) {
         Profile_ShowKeyboard(it->arg == SET_PROFILE_NEW);
+        return;
+      }
+      if (it->arg == SET_PROFILE_SAVE) {
+        // Save = keep the current name, just persist the active glider settings under it.
+        // Renaming is what New/Edit are for -- routing Save through the same keyboard as
+        // those two was the exact ambiguity this was reworked to remove.
+        Profile_Save(g_profileIdx);
+        Info_Show("Profile saved");
         return;
       }
       if (it->arg == SET_RESET_CFG || it->arg == SET_FACTORY_RESET || it->arg == SET_PROFILE_DELETE) {
         Confirm_Show((int8_t)it->arg);
+        return;
+      }
+      if (it->arg == SET_SHOW_QR) {
+        // Turns the AP on if it was off (so "Show QR Code" always works from a single
+        // click, no need to flip "App connect" first) -- but only turns it ON, never
+        // toggles it OFF, unlike SmToggle(SET_APPCONNECT) above.
+        if (!FlightLog_ServerActive()) { FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); }
+        QrScreen_Show();
         return;
       }
       break;
@@ -1385,12 +1481,13 @@ static void SetupMenu_Init()
   lv_obj_add_flag(objects.vario_list, LV_OBJ_FLAG_HIDDEN);
 
   // --- System submenu (system_list hand-built in EEZ) ---
-  // Ordre EEZ exact (position Y croissante): syname0=App connect, syname1=Condor sim,
-  // syname3_=Reset config, syname4=Factory reset, syname5=About, syname6=Back
-  s_syName[0] = objects.syname0;  s_syName[1] = objects.syname1;
-  s_syName[2] = objects.syname3_; s_syName[3] = objects.syname4;
-  s_syName[4] = objects.syname5;  s_syName[5] = objects.syname6;  // Back (rouge dans EEZ)
-  s_syVal[0] = objects.syval0; s_syVal[1] = objects.syval1;
+  // Ordre EEZ exact (position Y croissante): syname0=App connect, syname2=Show QR Code,
+  // syname1=Condor sim, syname3_=Reset config, syname4=Factory reset, syname5=About, syname6=Back
+  s_syName[0] = objects.syname0;  s_syName[1] = objects.syname2;
+  s_syName[2] = objects.syname1;  s_syName[3] = objects.syname3_;
+  s_syName[4] = objects.syname4;  s_syName[5] = objects.syname5;
+  s_syName[6] = objects.syname6;  // Back (rouge dans EEZ)
+  s_syVal[0] = objects.syval0; s_syVal[2] = objects.syval1;
   lv_obj_set_scrollbar_mode(objects.system_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(objects.system_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.system_list, LV_OBJ_FLAG_HIDDEN);
@@ -1474,9 +1571,12 @@ static void SetupMenu_Init()
   s_ibListNames[9]  = objects.ibname9;
   s_ibListNames[10] = objects.ibname10;
   s_ibListNames[11] = objects.ibname11;  // "Airspeed"
-  s_ibListNames[12] = objects.ibname13;  // "Ground Speed"
-  s_ibListNames[13] = objects.ibname14;  // "Disabled"
-  s_ibListNames[14] = objects.ibname15;  // "Back"
+  s_ibListNames[12] = objects.ibname13;  // "Ground Speed" (EEZ object numbering has a gap at 12)
+  s_ibListNames[13] = objects.ibname14;  // "Speed to Fly"
+  s_ibListNames[14] = objects.ibname15;  // "Alerts"
+  s_ibListNames[15] = objects.ibname16;  // "Mode"
+  s_ibListNames[16] = objects.ibname17;  // "Disabled"
+  s_ibListNames[17] = objects.ibname18;  // "Back"
 
   s_ciListNames[0] = objects.cname0;
   s_ciListNames[1] = objects.cname1;
@@ -1792,7 +1892,6 @@ static void SetupMenu_Apply()
 // ============================================================
 static lv_obj_t* s_qrCode = NULL;
 static bool      g_qrOpen = false;
-static bool      s_qrServerWasActive = false;
 
 static void QrScreen_Show() {
   if (!s_qrCode && objects.qr_slot) {
@@ -1826,14 +1925,15 @@ static void QrScreen_Close() {
   g_qrOpen = false;
 }
 
-// Opens automatically as soon as "App connect" (System menu) goes OFF->ON; closes
-// on its own if the server goes OFF again (nothing left to scan). Manual close (long
-// press ENC1, see menu_onLongPress) = just closes the overlay, does NOT turn off WiFi.
+// "App connect" (System menu) ON/OFF only starts/stops the WiFi AP -- it does NOT open
+// the QR overlay by itself anymore (that used to auto-pop the QR on every OFF->ON, which
+// is exactly the toggle/QR ambiguity this menu was reworked to remove). Showing the QR is
+// now only ever triggered explicitly, by the separate "Show QR Code" row (SET_SHOW_QR).
+// This tick still auto-closes the overlay if the server drops out from under it (nothing
+// left to scan). Manual close (long press ENC1, see menu_onLongPress) = just closes the
+// overlay, does NOT turn off WiFi.
 static void QrScreen_Tick() {
-  bool active = FlightLog_ServerActive();
-  if (active && !s_qrServerWasActive) QrScreen_Show();
-  else if (!active && g_qrOpen)       QrScreen_Close();
-  s_qrServerWasActive = active;
+  if (!FlightLog_ServerActive() && g_qrOpen) QrScreen_Close();
 }
 
 // ============================================================
@@ -2640,8 +2740,20 @@ static void STF_Apply()
   float mc = g_mcTenths / 10.0f;
 
   // Dynamic (dolphin) STF: shift the MacCready target by the current netto (air mass, + up).
+  //
+  // Tangent-line derivation (28 July 2026 fix): the classic MacCready construction draws
+  // the line from (0, MC) -- MC = expected climb rate, POSITIVE -- tangent to sink(v).
+  // At the tangent point v*: sink(v*) = m*v* + MC and sink'(v*) = m, with
+  // sink(v)=av^2+bv+c, sink'(v)=2av+b. Substituting m=2av*+b into the first equation and
+  // simplifying (the bv* terms cancel) gives c = a*v*^2 - MC, i.e. v*^2 = (c - MC) / a.
+  // The previous code had (c + MC) / a: for a REAL glider polar, sink is a concave-down
+  // curve in v (single hump, worst at both low and high speed) -> the quadratic fit's
+  // 'a' comes out NEGATIVE (verified against this project's default polar V1=80/Si1=-0.59,
+  // V2=115/Si2=-0.76, V3=173/Si3=-2.00: a=-1.78e-4). With a<0, the wrong-signed (c+MC)/a
+  // makes STF speed FALL as MC rises (68.6 km/h at MC=1 vs 101.6 km/h at MC=0) -- backwards.
+  // (c - MC)/a gives 126.3 km/h at MC=1: correct direction, faster STF for a higher MC.
   float w  = isnan(g_varioNetto) ? 0.0f : g_varioNetto;
-  float v2 = (c + mc - w) / a;
+  float v2 = (c - mc + w) / a;
   float vstf = (v2 > 0.0f) ? sqrtf(v2) : NAN;
 
   // Headwind compensation (uses the circling wind estimate): fly faster into a headwind.
@@ -2814,9 +2926,13 @@ static void Vol_Apply()
     lv_obj_align_to(g_lblVolNum, g_arcVol, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
+    // Zone 5 (pod) sits in the exact same footprint as this volume arc -> hide it while
+    // the arc is showing, or the two overlap illegibly.
+    if (s_ibLabels[5]) lv_obj_add_flag(s_ibLabels[5], LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
+    if (s_ibLabels[5] && g_infoBoxConfig[5] != IB_EMPTY) lv_obj_clear_flag(s_ibLabels[5], LV_OBJ_FLAG_HIDDEN);
   }
 }
 
@@ -2840,6 +2956,21 @@ static void Labels_Init()
   s_ibLabels[2] = objects.lbl_ib_bas_cent;   // reserved: always IB_EMPTY (g_infoBoxConfig[2])
   s_ibLabels[3] = objects.lbl_ib_bas_sup;
   s_ibLabels[4] = objects.lbl_ib_bas_inf;
+  s_ibLabels[5] = objects.lbl_ib_bas_right;  // "pod" status zone (62x96), added 28 July 2026
+  // Recolor markup ("#rrggbb text#") needed for IB_STF's two-tone target/current-speed
+  // readout below. Harmless for every other metric: plain text without a '#' just
+  // renders in the label's normal color, unaffected.
+  for (int i = 0; i < 6; i++) if (s_ibLabels[i]) lv_label_set_recolor(s_ibLabels[i], true);
+  // Fixed width instead of EEZ's default LV_SIZE_CONTENT: with auto-width, the label's
+  // own bounding box grows/shrinks with the digit count (e.g. "850"\n"m" vs "1200"\n"m"),
+  // and since positioning is CENTER-aligned on the pod's midpoint, that box resize made
+  // the whole block -- unit included -- visibly shift sideways on every value change
+  // (28 July 2026). A fixed width + centered text inside it keeps both lines put; only
+  // the digits themselves move.
+  if (s_ibLabels[5]) {
+    lv_obj_set_width(s_ibLabels[5], 60);
+    lv_obj_set_style_text_align(s_ibLabels[5], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+  }
 }
 
 // Update the numeric labels (altitude, vario, integrated vario).
@@ -2860,76 +2991,107 @@ static void Labels_Apply()
     if (!s_ibLabels[i]) continue;
     if (g_infoBoxConfig[i] == IB_EMPTY) {
       lv_label_set_text(s_ibLabels[i], "");
-      lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
+      if (i == 5) lv_obj_align(s_ibLabels[i], LV_ALIGN_CENTER, 160, 0);
+      else        lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
       continue;
     }
     char buf[32];
+    // Default color every frame: only IB_ALERTS overrides it (blink), otherwise a zone
+    // that used to show an active alert would stay stuck red/yellow after being reassigned.
+    // Zone 5 (pod) sits on a light background (same as the editor's ib_val_5 preview) ->
+    // dark text there, white everywhere else (dark background).
+    lv_obj_set_style_text_color(s_ibLabels[i], lv_color_hex(i == 5 ? 0x1f333e : 0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
     switch (g_infoBoxConfig[i]) {
+      // Pod (zone 5, 62px wide) can't fit "value unit" on one line for anything but the
+      // shortest metrics -- split value/unit (or, for Wind, dir/speed) across 2 lines
+      // there, same convention as IB_STF below. Everything else (zones 0,1,3,4, wide
+      // enough) keeps the original single-line format.
       case IB_VARIO_INST: {
         float v = isnan(g_varioComp) ? 0.0f : g_varioComp;
         float vd = g_uVert ? v * 1.94384f : v;
-        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vd);
+        if (i == 5) snprintf(buf, sizeof(buf), "%+.1f\n%s", vd, g_uVert ? "kt" : "m/s");
+        else        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vd);
         break;
       }
       case IB_VARIO_INT: {
         float vi = isfinite(g_varioAvg) ? g_varioAvg : 0.0f;
         float vid = g_uVert ? vi * 1.94384f : vi;
-        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vid);
+        if (i == 5) snprintf(buf, sizeof(buf), "%+.1f\n%s", vid, g_uVert ? "kt" : "m/s");
+        else        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vid);
         break;
       }
       case IB_MACCREADY: {
-        snprintf(buf, sizeof(buf), "MC %.1f", g_mcTenths / 10.0f);
+        if (i == 5) snprintf(buf, sizeof(buf), "MC\n%.1f", g_mcTenths / 10.0f);
+        else        snprintf(buf, sizeof(buf), "MC %.1f", g_mcTenths / 10.0f);
         break;
       }
       case IB_ALT_BARO: {
         float am = g_uAlt ? g_altitude * 3.28084f : g_altitude;
         int a = (int)(am + (am >= 0 ? 0.5f : -0.5f));
-        snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a);
+        if (i == 5) snprintf(buf, sizeof(buf), "%d\n%s", a, g_uAlt ? "ft" : "m");
+        else        snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a);
         break;
       }
       case IB_ALT_GPS: {
-        if (!g_gpsOk || isnan(g_gpsAlt)) { snprintf(buf, sizeof(buf), "--- %s", g_uAlt ? "ft" : "m"); break; }
+        if (!g_gpsOk || isnan(g_gpsAlt)) {
+          if (i == 5) snprintf(buf, sizeof(buf), "---\n%s", g_uAlt ? "ft" : "m");
+          else        snprintf(buf, sizeof(buf), "--- %s", g_uAlt ? "ft" : "m");
+          break;
+        }
         float am = g_uAlt ? g_gpsAlt * 3.28084f : g_gpsAlt;
         int a = (int)(am + (am >= 0 ? 0.5f : -0.5f));
-        snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a);
+        if (i == 5) snprintf(buf, sizeof(buf), "%d\n%s", a, g_uAlt ? "ft" : "m");
+        else        snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a);
         break;
       }
       case IB_AIRSPEED: {
         // g_airspeed en m/s -> km/h (x3.6) ou noeuds (x1.94384)
         float s = g_uSpeed ? g_airspeed * 1.94384f : g_airspeed * 3.6f;
-        snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
+        if (i == 5) snprintf(buf, sizeof(buf), "%.0f\n%s", s, g_uSpeed ? "kt" : "km/h");
+        else        snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
       case IB_GND_SPEED: {
         float gs = isfinite(g_gndSpeed) ? g_gndSpeed : 0.0f;   // m/s
         float s = g_uSpeed ? gs * 1.94384f : gs * 3.6f;
-        snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
+        if (i == 5) snprintf(buf, sizeof(buf), "%.0f\n%s", s, g_uSpeed ? "kt" : "km/h");
+        else        snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
         break;
       }
       case IB_TIME: {
-        snprintf(buf, sizeof(buf), "%02u:%02u:%02u",
-                 (unsigned)datetime.hour, (unsigned)datetime.minute, (unsigned)datetime.second);
+        // Pod: drops seconds (HH:MM, "HH:MM:SS" doesn't fit even split in two) and gets
+        // a "Time" label -> without it, easy to confuse with Flight Time (both HH:MM).
+        if (i == 5) snprintf(buf, sizeof(buf), "Time\n%02u:%02u", (unsigned)datetime.hour, (unsigned)datetime.minute);
+        else        snprintf(buf, sizeof(buf), "%02u:%02u:%02u",
+                              (unsigned)datetime.hour, (unsigned)datetime.minute, (unsigned)datetime.second);
         break;
       }
       case IB_FLIGHT_TIME: {
         unsigned long sec = g_takeoffMs ? (millis() - g_takeoffMs) / 1000UL : 0UL;
-        snprintf(buf, sizeof(buf), "%02lu:%02lu", sec / 3600UL, (sec % 3600UL) / 60UL);
+        if (i == 5) snprintf(buf, sizeof(buf), "Flt\n%02lu:%02lu", sec / 3600UL, (sec % 3600UL) / 60UL);
+        else        snprintf(buf, sizeof(buf), "%02lu:%02lu", sec / 3600UL, (sec % 3600UL) / 60UL);
         break;
       }
       case IB_WIND: {
-        if (isnan(g_windSpeedMs)) { snprintf(buf, sizeof(buf), "Wind ---"); break; }
+        if (isnan(g_windSpeedMs)) { snprintf(buf, sizeof(buf), i == 5 ? "Wind\n---" : "Wind ---"); break; }
         float spd = g_uSpeed ? g_windSpeedMs * 1.94384f : g_windSpeedMs * 3.6f;  // m/s -> kt / km/h
-        snprintf(buf, sizeof(buf), "%03.0f %.0f", g_windDirDeg, spd);
+        // Not a value/unit pair (direction and speed are both meaningful numbers) ->
+        // direction on top, speed below, same stacking principle. Degree sign: UTF-8
+        // 0xC2 0xB0, confirmed already rendering fine elsewhere (lbl_wind_dir).
+        if (i == 5) snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0\n%.0f", g_windDirDeg, spd);
+        else        snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0 %.0f", g_windDirDeg, spd);
         break;
       }
       case IB_CLIMB_GAIN: {
         int g = (int)(g_climbGain + (g_climbGain >= 0 ? 0.5f : -0.5f));
-        snprintf(buf, sizeof(buf), "%+d m", g);
+        if (i == 5) snprintf(buf, sizeof(buf), "%+d\nm", g);
+        else        snprintf(buf, sizeof(buf), "%+d m", g);
         break;
       }
       case IB_FLIGHT_LVL: {
         int fl = (int)((g_altitude / 30.48f) + 0.5f);
-        snprintf(buf, sizeof(buf), "FL %03d", fl);
+        if (i == 5) snprintf(buf, sizeof(buf), "FL\n%03d", fl);
+        else        snprintf(buf, sizeof(buf), "FL %03d", fl);
         break;
       }
       case IB_GLIDE: {
@@ -2937,22 +3099,39 @@ static void Labels_Apply()
         if (spd > 5.5f && g_varioFused < -0.1f) {                    // 5.5 m/s ~ 20 km/h
           float ld = spd / (-g_varioFused);   // deja m/s / m/s -> ratio (etait /3.6 = bug km/h)
           if (ld > 199.0f) ld = 199.0f;
-          snprintf(buf, sizeof(buf), "L/D %.0f", ld);
+          if (i == 5) snprintf(buf, sizeof(buf), "L/D\n%.0f", ld);
+          else        snprintf(buf, sizeof(buf), "L/D %.0f", ld);
         } else {
-          snprintf(buf, sizeof(buf), "L/D ---");
+          snprintf(buf, sizeof(buf), i == 5 ? "L/D\n---" : "L/D ---");
         }
         break;
       }
       case IB_NETTO: {
-        if (isnan(g_varioNetto)) { snprintf(buf, sizeof(buf), "--- %s", g_uVert ? "kt" : "m/s"); break; }
+        if (isnan(g_varioNetto)) {
+          snprintf(buf, sizeof(buf), i == 5 ? "---\n%s" : "--- %s", g_uVert ? "kt" : "m/s");
+          break;
+        }
         float v = g_uVert ? g_varioNetto * 1.94384f : g_varioNetto;
-        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", v);
+        if (i == 5) snprintf(buf, sizeof(buf), "%+.1f\n%s", v, g_uVert ? "kt" : "m/s");
+        else        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", v);
         break;
       }
       case IB_STF: {
+        // Target STF speed (yellow) next to the current speed (white) -- lets the pilot
+        // see at a glance how far off the optimal cruise speed they are, not just the
+        // target in isolation. "Current speed" = same airspeed/ground-speed fallback as
+        // Glide Ratio (airspeed once it's actually valid/moving, ground speed otherwise).
         if (isnan(g_stfSpeed)) { snprintf(buf, sizeof(buf), "STF ---"); break; }
-        float s = g_uSpeed ? g_stfSpeed * 0.539957f : g_stfSpeed;
-        snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s);
+        float target = g_uSpeed ? g_stfSpeed * 0.539957f : g_stfSpeed;
+        float curMs  = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;
+        float cur    = g_uSpeed ? curMs * 1.94384f : curMs * 3.6f;
+        if (i == 5) {
+          // Pod (zone 5): narrow (62px) -> stacked instead of side by side, unit dropped
+          // to save width (same convention as Wind, which also shows bare numbers here).
+          snprintf(buf, sizeof(buf), "#fbd500 %.0f#\n%.0f", target, cur);
+        } else {
+          snprintf(buf, sizeof(buf), "#fbd500 %.0f#  %.0f %s", target, cur, g_uSpeed ? "kt" : "km/h");
+        }
         break;
       }
       case IB_STF_CMD: {
@@ -2966,16 +3145,28 @@ static void Labels_Apply()
       case IB_ALERTS: {
         // Most severe fault first. LINK = frozen data (the sneakiest one),
         // SD = log lost, BAT = endurance, GPS = no more wind/track.
+        bool active = true;
         if      (!g_linkOk)                  snprintf(buf, sizeof(buf), "LINK!");
         else if (!FlightLog_SdOk())          snprintf(buf, sizeof(buf), "SD!");
         else if (BAT_analogVolts < 3.60f)    snprintf(buf, sizeof(buf), "BAT!");
         else if (!g_gpsOk)                   snprintf(buf, sizeof(buf), "GPS?");
-        else                                 snprintf(buf, sizeof(buf), "OK");
+        else                                 { snprintf(buf, sizeof(buf), "OK"); active = false; }
+        // Blink yellow/red while a fault is active -- "OK" just stays the normal color,
+        // nothing to draw attention to. ~600ms per phase ("pas trop vite" per Damien):
+        // fast enough to catch the eye, slow enough not to be an epileptic strobe.
+        lv_obj_set_style_text_color(s_ibLabels[i],
+          lv_color_hex(!active ? (i == 5 ? 0x1f333e : 0xffffff)
+                                : (((millis() / 600) % 2 == 0) ? 0xfbd500 : 0xff0000)),
+          LV_PART_MAIN | LV_STATE_DEFAULT);
         break;
       }
       case IB_MODE: {
-        // Active info-box profile: drives the content of the other zones.
-        snprintf(buf, sizeof(buf), g_ibEditCruiseMode ? "Cruise" : "Climb");
+        // Live active profile (same condition that auto-switches g_infoBoxConfig based
+        // on g_circling, see the caller of Labels_Apply) -- NOT g_ibEditCruiseMode, which
+        // only reflects whichever profile was last opened in the Info Boxes editor and
+        // stays stuck on that regardless of what's actually flying (found 28 July 2026:
+        // Mode showing "Climb" forever, never following the real circling state).
+        snprintf(buf, sizeof(buf), g_circling ? "Climb" : "Cruise");
         break;
       }
       default:
@@ -2983,7 +3174,14 @@ static void Labels_Apply()
         break;
     }
     lv_label_set_text(s_ibLabels[i], buf);
-    lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
+    // Zone 5 (pod): small 62x96 circle off to the side, not part of the wide horizontal
+    // TOP_MID row the other 4 zones share -> center on its own visual midpoint instead
+    // (pod frame is at x=369 y=192 62x96 -> center (400,240); parent is the full-screen
+    // 480x480 container centered at (240,240), so offset = (160,0)). Works for both the
+    // usual 1-line metrics and IB_STF's 2-line stacked layout: CENTER always centers the
+    // label's bounding box regardless of its content/size.
+    if (i == 5) lv_obj_align(s_ibLabels[i], LV_ALIGN_CENTER, 160, 0);
+    else        lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
   }
 
   // GPS indicator: connected / waiting image depending on the fix received from the calculator
@@ -3251,6 +3449,7 @@ void loop()
                  g_volume);
   FlightLog_ServerLoop();
   QrScreen_Tick();   // opens/closes the QR screen per the "App connect" state
+  Info_Tick();       // auto-closes the info popup ("Profile saved" etc.) after a timeout
 
   // --- Rapport perf (instrumentation LVGL_Driver) ---
   {

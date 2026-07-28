@@ -30,6 +30,7 @@ typedef struct _objects_t {
     lv_obj_t *lbl_ib_bas_cent;
     lv_obj_t *lbl_ib_bas_sup;
     lv_obj_t *lbl_ib_bas_inf;
+    lv_obj_t *lbl_ib_bas_right;
     lv_obj_t *img_wind_arrow_avg;
     lv_obj_t *img_wind_arrow;
     lv_obj_t *img_wind_arrow_energy;
@@ -111,12 +112,13 @@ typedef struct _objects_t {
     lv_obj_t *system_list;
     lv_obj_t *syname0;
     lv_obj_t *syval0;
+    lv_obj_t *syname2;
     lv_obj_t *syname1;
     lv_obj_t *syval1;
     lv_obj_t *syname3_;
-    lv_obj_t *syname6;
     lv_obj_t *syname4;
     lv_obj_t *syname5;
+    lv_obj_t *syname6;
     lv_obj_t *about_list;
     lv_obj_t *abname0;
     lv_obj_t *abval0;
@@ -159,7 +161,7 @@ typedef struct _objects_t {
     lv_obj_t *cname2;
     lv_obj_t *prname5_1;
     lv_obj_t *infobox_list;
-    lv_obj_t *ibname15;
+    lv_obj_t *ibname18;
     lv_obj_t *ibname0;
     lv_obj_t *ibname1;
     lv_obj_t *ibname2;
@@ -174,6 +176,9 @@ typedef struct _objects_t {
     lv_obj_t *ibname11;
     lv_obj_t *ibname13;
     lv_obj_t *ibname14;
+    lv_obj_t *ibname15;
+    lv_obj_t *ibname16;
+    lv_obj_t *ibname17;
     lv_obj_t *infobox_editor_container;
     lv_obj_t *ib_frame_0;
     lv_obj_t *ib_val_0;

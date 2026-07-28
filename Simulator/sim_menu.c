@@ -53,6 +53,9 @@ static void RTC_Loop(void) {
 static volatile int g_mcTenths = 15;
 #define MC_MIN_T 0
 #define MC_MAX_T 50
+// Computed each frame by STF_Apply_Sim() (real polar fit on the selected glider + MC),
+// see below Labels_Apply -- not a stub anymore, just missing the netto/dolphin term.
+static float g_stfSpeed = NAN;
 
 /* ============================================================
  *  QUICK MENU
@@ -132,6 +135,12 @@ static const char* const s_ibMetricAbbrev[IB_METRIC_MAX] = {
   "Inst. Vario","Avg. Vario","MacCready","Baro Alt.","GPS Alt.","Airspeed","Gnd Speed",
   "Time","Flight Time","Wind","Climb Gain","Flight Lvl","Glide Ratio","",
   "Netto","STF","Alerts","Mode"
+};
+/* Meme liste, pour la zone 5 (pod 62px) seulement : voir le commentaire dans main.cpp. */
+static const char* const s_ibMetricAbbrevTiny[IB_METRIC_MAX] = {
+  "Vario","AvgV","MC","Alt","GAlt","IAS","GS",
+  "Time","FTime","Wind","Gain","FL","L/D","",
+  "Netto","STF","Alert","Mode"
 };
 static const char* const s_centerMetricAbbrev[CENTER_METRIC_MAX] = { "Thermal Help", "Wind Dir.", "" };
 
@@ -259,7 +268,7 @@ enum { ST_SUB, ST_TOGGLE, ST_VALUE, ST_CHOICE, ST_INFO, ST_BACK };
 enum { SET_NONE, SET_HELPER, SET_BRIGHT, SET_VOLUME, SET_SINK, SET_LOGGER, SET_CONDOR, SET_RANGE,
        SET_ROT, SET_U_VERT, SET_U_ALT, SET_U_SPEED, SET_PITCH, SET_WAVE, SET_TONE_SPREAD,
        SET_VFILTER, SET_VAVG, SET_UPDATE, SET_CONDORSIM, SET_FWVER, SET_BUILD, SET_LINKVER, SET_CREATOR, SET_ALGO,
-       SET_APPCONNECT, SET_RESET_CFG, SET_FACTORY_RESET,
+       SET_APPCONNECT, SET_SHOW_QR, SET_RESET_CFG, SET_FACTORY_RESET,
        SET_GLIDER_MODEL, SET_GLIDER_EMPTY_WT, SET_GLIDER_MAX_BAL, SET_GLIDER_V1, SET_GLIDER_SI1, SET_GLIDER_V2, SET_GLIDER_SI2, SET_GLIDER_V3, SET_GLIDER_SI3,
        SET_PROFILE_SELECT, SET_PROFILE_EDIT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
 
@@ -274,7 +283,8 @@ static const SmItem VIT[]  = { {"Vario range",ST_CHOICE,SET_RANGE},{"Vario filte
 static const SmItem SIT[]  = { {"Tone pitch",ST_VALUE,SET_PITCH},{"Waveform",ST_CHOICE,SET_WAVE},{"Tone spread",ST_VALUE,SET_TONE_SPREAD},{"Back",ST_BACK,0} };
 static const SmItem DIT[]  = { {"Info boxes",ST_SUB,SM_INFOBOX},{"Units",ST_SUB,SM_UNITS},{"Brightness",ST_VALUE,SET_BRIGHT},{"Screen rot.",ST_CHOICE,SET_ROT},{"Back",ST_BACK,0} };
 static const SmItem SYIT[] = {
-  {"App connect",   ST_TOGGLE, SET_APPCONNECT}, {"Condor sim", ST_TOGGLE, SET_CONDORSIM},
+  {"App connect",   ST_TOGGLE, SET_APPCONNECT}, {"Show QR Code", ST_INFO, SET_SHOW_QR},
+  {"Condor sim",    ST_TOGGLE, SET_CONDORSIM},
   {"Reset config",  ST_INFO,   SET_RESET_CFG},  {"Factory reset", ST_INFO, SET_FACTORY_RESET},
   {"About", ST_SUB, SM_ABOUT}, {"Back", ST_BACK, 0}
 };
@@ -285,7 +295,7 @@ static const SmItem IBIT_LIST[] = {
   {"Baro Alt.", ST_INFO, IB_ALT_BARO}, {"GPS Alt.", ST_INFO, IB_ALT_GPS}, {"Time", ST_INFO, IB_TIME},
   {"Flight Time", ST_INFO, IB_FLIGHT_TIME}, {"Wind", ST_INFO, IB_WIND}, {"Climb Gain", ST_INFO, IB_CLIMB_GAIN},
   {"Flight Level", ST_INFO, IB_FLIGHT_LVL}, {"Glide Ratio", ST_INFO, IB_GLIDE}, {"Airspeed", ST_INFO, IB_AIRSPEED},
-  {"Ground Speed", ST_INFO, IB_GND_SPEED},
+  {"Ground Speed", ST_INFO, IB_GND_SPEED}, {"Speed to Fly", ST_INFO, IB_STF},
   {"Alerts", ST_INFO, IB_ALERTS}, {"Mode", ST_INFO, IB_MODE},
   {"Disabled", ST_INFO, IB_EMPTY},
   {"Back", ST_BACK, 0}
@@ -301,8 +311,8 @@ static const SmItem PRIT[] = { {"Profile",ST_CHOICE,SET_PROFILE_SELECT},{"Edit",
 
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
-  {"System",SYIT,6},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,17}
+  {"System",SYIT,7},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,18}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -316,12 +326,12 @@ static lv_obj_t* s_dName[5] = {0};  static lv_obj_t* s_dVal[5]  = {0};
 static lv_obj_t* s_uName[4] = {0};  static lv_obj_t* s_uVal[4]  = {0};
 static lv_obj_t* s_sName[4] = {0};  static lv_obj_t* s_sVal[4]  = {0};
 static lv_obj_t* s_vName[4] = {0};  static lv_obj_t* s_vVal[4]  = {0};
-static lv_obj_t* s_syName[6] = {0}; static lv_obj_t* s_syVal[6]  = {0};
+static lv_obj_t* s_syName[7] = {0}; static lv_obj_t* s_syVal[7]  = {0};
 static lv_obj_t* s_abName[4] = {0}; static lv_obj_t* s_abVal[4]  = {0};
 static lv_obj_t* s_glName[10] = {0};static lv_obj_t* s_glVal[10]  = {0};
 static lv_obj_t* s_prName[6]  = {0};static lv_obj_t* s_prVal[6]   = {0};
 static lv_obj_t* s_imName[3] = {0}; static lv_obj_t* s_imVal[3] = {0};
-static lv_obj_t* s_ibListNames[15] = {0}; static lv_obj_t* s_ibListVals[15] = {0};
+static lv_obj_t* s_ibListNames[18] = {0}; static lv_obj_t* s_ibListVals[18] = {0};
 static lv_obj_t* s_ciListNames[4] = {0};  static lv_obj_t* s_ciListVals[4] = {0};
 
 static lv_obj_t* s_confirmPanel = NULL;
@@ -330,6 +340,9 @@ static lv_obj_t* s_confirmYes   = NULL;
 static lv_obj_t* s_confirmNo    = NULL;
 static int8_t g_smConfirm  = -1;
 static bool   g_confirmSel = false;
+static bool   g_infoOpen   = false;  /* popup d'info a 1 bouton, reutilise confirm_panel */
+static uint32_t g_infoShownMs = 0;
+#define INFO_POPUP_MS 1800
 
 /* Editeur de nom de profil : 5 cases de caractere + cases OK/Cancel, navigation
  * 100% encodeur (remplace l'ancien clavier LVGL AZERTY -- identique a main.cpp). */
@@ -354,7 +367,10 @@ static void InfoBox_ShowSelect(void);
 static void InfoBox_CloseEdit(void);
 static void Confirm_Show(int8_t action);
 static void Confirm_Hide(void);
+static void Info_Show(const char* msg);
+static void Info_Hide(void);
 static void Profile_ShowKeyboard(bool isNew);
+static void QrScreen_Show(void);
 
 static bool ProfileName_IsDuplicate(const char* candidate) {
   for (int i = 0; i < 5; i++) {
@@ -632,7 +648,7 @@ static void InfoBox_RenderSelect(void) {
       } else {
         int mIdx = g_infoBoxConfig[i];
         if (mIdx >= IB_METRIC_MAX) mIdx = IB_EMPTY;
-        lv_label_set_text(s_ibValLabels[i], s_ibMetricAbbrev[mIdx]);
+        lv_label_set_text(s_ibValLabels[i], (i == 5) ? s_ibMetricAbbrevTiny[mIdx] : s_ibMetricAbbrev[mIdx]);
       }
       if (s_ibFrames[i]) lv_obj_align_to(s_ibValLabels[i], s_ibFrames[i], LV_ALIGN_CENTER, 0, 0);
     }
@@ -657,11 +673,13 @@ static void SetupMenu_Open(void)  { g_setupOpen = true; g_menuState = MENU_CLOSE
                                 g_smMenu = SM_ROOT; g_smSel = 0; g_smDepth = 0; g_smEdit = false; g_smDirty = true; }
 static void SetupMenu_Close(void) {
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); }
+  if (g_infoOpen) Info_Hide();
   if (g_ibEditState != IBEDIT_NONE) { InfoBox_CloseEdit(); }
   if (s_pnContainer) ProfileName_Close();
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
 static void SetupMenu_Back(void)  {
+  if (g_infoOpen) { Info_Hide(); return; }
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); g_smDirty = true; return; }
   if (g_smMenu == SM_INFOBOX_METRIC || g_ibEditState == IBEDIT_CHOOSE_METRIC) {
     g_ibEditState = IBEDIT_SELECT_ZONE;
@@ -705,6 +723,27 @@ static void Confirm_Hide(void) {
   if (s_confirmPanel) lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN);
   g_smDirty = true;
 }
+static void Info_Show(const char* msg) {
+  g_infoOpen = true;
+  g_infoShownMs = millis();
+  if (s_confirmMsg) { lv_label_set_text(s_confirmMsg, msg); lv_obj_align(s_confirmMsg, LV_ALIGN_CENTER, 0, 0); }
+  if (s_confirmYes) lv_obj_add_flag(s_confirmYes, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmNo)  lv_obj_add_flag(s_confirmNo,  LV_OBJ_FLAG_HIDDEN);
+  if (objects.confirm_panel_selection) lv_obj_add_flag(objects.confirm_panel_selection, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmPanel) { lv_obj_clear_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); lv_obj_move_foreground(s_confirmPanel); }
+}
+static void Info_Hide(void) {
+  g_infoOpen = false;
+  if (s_confirmMsg) lv_obj_set_pos(s_confirmMsg, -41, 25);
+  if (s_confirmYes) lv_obj_clear_flag(s_confirmYes, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmNo)  lv_obj_clear_flag(s_confirmNo,  LV_OBJ_FLAG_HIDDEN);
+  if (objects.confirm_panel_selection) lv_obj_clear_flag(objects.confirm_panel_selection, LV_OBJ_FLAG_HIDDEN);
+  if (s_confirmPanel) lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN);
+  g_smDirty = true;
+}
+static void Info_Tick(void) {
+  if (g_infoOpen && millis() - g_infoShownMs > INFO_POPUP_MS) Info_Hide();
+}
 
 static void SetupMenu_Rotate(long d) {
   if (s_pnContainer) {
@@ -723,6 +762,7 @@ static void SetupMenu_Rotate(long d) {
     ProfileName_Render();
     return;
   }
+  if (g_infoOpen) return;
   if (g_smConfirm != -1) { g_confirmSel = !g_confirmSel; Confirm_Render(); return; }
   if (g_ibEditState == IBEDIT_SELECT_ZONE) {
     // Zone 5 (status pod) activated 19 July 2026 -- must stay aligned with main.cpp
@@ -755,6 +795,7 @@ static void SetupMenu_Press(void) {
     ProfileName_Render();
     return;
   }
+  if (g_infoOpen) { Info_Hide(); return; }
   if (g_smConfirm != -1) {
     if (g_confirmSel) {
       if (g_smConfirm == (int8_t)SET_RESET_CFG || g_smConfirm == (int8_t)SET_FACTORY_RESET) {
@@ -823,8 +864,14 @@ static void SetupMenu_Press(void) {
     case ST_VALUE:
     case ST_CHOICE: g_smEdit = true; break;
     case ST_INFO:
-      if (it->arg == SET_PROFILE_SAVE || it->arg == SET_PROFILE_NEW || it->arg == SET_PROFILE_EDIT) { Profile_ShowKeyboard(it->arg == SET_PROFILE_NEW); return; }
+      if (it->arg == SET_PROFILE_NEW || it->arg == SET_PROFILE_EDIT) { Profile_ShowKeyboard(it->arg == SET_PROFILE_NEW); return; }
+      if (it->arg == SET_PROFILE_SAVE) { Profile_Save(g_profileIdx); Info_Show("Profile saved"); return; }
       if (it->arg == SET_RESET_CFG || it->arg == SET_FACTORY_RESET || it->arg == SET_PROFILE_DELETE) { Confirm_Show((int8_t)it->arg); return; }
+      if (it->arg == SET_SHOW_QR) {
+        if (!FlightLog_ServerActive()) { FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); }
+        QrScreen_Show();
+        return;
+      }
       break;
   }
   g_smDirty = true;
@@ -877,8 +924,9 @@ static void SetupMenu_Init(void) {
   lv_obj_add_flag(objects.vario_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.vario_list, LV_OBJ_FLAG_HIDDEN);
 
-  s_syName[0]=objects.syname0; s_syName[1]=objects.syname1; s_syName[2]=objects.syname3_;
-  s_syName[3]=objects.syname4; s_syName[4]=objects.syname5; s_syName[5]=objects.syname6;
+  s_syName[0]=objects.syname0; s_syName[1]=objects.syname2; s_syName[2]=objects.syname1;
+  s_syName[3]=objects.syname3_; s_syName[4]=objects.syname4; s_syName[5]=objects.syname5;
+  s_syName[6]=objects.syname6;
   lv_obj_set_scrollbar_mode(objects.system_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(objects.system_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.system_list, LV_OBJ_FLAG_HIDDEN);
@@ -923,6 +971,7 @@ static void SetupMenu_Init(void) {
   s_ibListNames[6]=objects.ibname6; s_ibListNames[7]=objects.ibname7; s_ibListNames[8]=objects.ibname8;
   s_ibListNames[9]=objects.ibname9; s_ibListNames[10]=objects.ibname10; s_ibListNames[11]=objects.ibname11;
   s_ibListNames[12]=objects.ibname13; s_ibListNames[13]=objects.ibname14; s_ibListNames[14]=objects.ibname15;
+  s_ibListNames[15]=objects.ibname16; s_ibListNames[16]=objects.ibname17; s_ibListNames[17]=objects.ibname18;
 
   s_ciListNames[0]=objects.cname0; s_ciListNames[1]=objects.cname1; s_ciListNames[2]=objects.cname2; s_ciListNames[3]=objects.prname5_1;
 
@@ -1249,9 +1298,11 @@ static void Vol_Apply(void) {
     lv_obj_align_to(g_lblVolNum, g_arcVol, LV_ALIGN_CENTER, 0, 0);
     lv_obj_clear_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
+    if (s_ibLabels[5]) lv_obj_add_flag(s_ibLabels[5], LV_OBJ_FLAG_HIDDEN);
   } else {
     lv_obj_add_flag(g_arcVol,    LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(g_lblVolNum, LV_OBJ_FLAG_HIDDEN);
+    if (s_ibLabels[5] && g_infoBoxConfig[5] != IB_EMPTY) lv_obj_clear_flag(s_ibLabels[5], LV_OBJ_FLAG_HIDDEN);
   }
 }
 
@@ -1519,44 +1570,156 @@ static void Labels_Init(void) {
   s_ibLabels[2] = objects.lbl_ib_bas_cent;   // reserve : toujours IB_EMPTY (g_infoBoxConfig[2])
   s_ibLabels[3] = objects.lbl_ib_bas_sup;
   s_ibLabels[4] = objects.lbl_ib_bas_inf;
+  s_ibLabels[5] = objects.lbl_ib_bas_right;
+  for (int i = 0; i < 6; i++) if (s_ibLabels[i]) lv_label_set_recolor(s_ibLabels[i], true);
+  if (s_ibLabels[5]) {
+    lv_obj_set_width(s_ibLabels[5], 60);
+    lv_obj_set_style_text_align(s_ibLabels[5], LV_TEXT_ALIGN_CENTER, LV_PART_MAIN | LV_STATE_DEFAULT);
+  }
 }
 
 static const lv_coord_t IB_LABEL_Y[6] = { 84, 113, 228, 338, 374, 0 };
 
+/* Port fidele de Polar_Fit()/STF_Apply() (main.cpp) : ajuste sink(V)=aV^2+bV+c sur les 3
+ * points (V1/Si1 V2/Si2 V3/Si3) de la polaire du planeur SELECTIONNE (g_gliderV1 etc,
+ * deja alimentes par la base g_gliderDb / le menu Glider infos) -> le STF affiche reagit
+ * au vrai MC ET au vrai choix de planeur, pas une approximation. g_varioNetto n'est pas
+ * simule ici (w=0, pas de composante dauphin dynamique) -- seule difference avec le vrai
+ * calcul, sans impact visible sur le test du layout. */
+static void Polar_Fit_Sim(float* a, float* b, float* c) {
+  float v1 = (float)g_gliderV1, v2 = (float)g_gliderV2, v3 = (float)g_gliderV3;
+  float s1 = g_gliderSi1, s2 = g_gliderSi2, s3 = g_gliderSi3;
+  float d1 = (v1 - v2) * (v1 - v3);
+  float d2 = (v2 - v1) * (v2 - v3);
+  float d3 = (v3 - v1) * (v3 - v2);
+  if (fabsf(d1) < 1e-3f || fabsf(d2) < 1e-3f || fabsf(d3) < 1e-3f) { *a = 0.0f; *b = 0.0f; *c = s1; return; }
+  float a1 = 1.0f/d1, b1 = -(v2+v3)/d1, c1 = (v2*v3)/d1;
+  float a2 = 1.0f/d2, b2 = -(v1+v3)/d2, c2 = (v1*v3)/d2;
+  float a3 = 1.0f/d3, b3 = -(v1+v2)/d3, c3 = (v1*v2)/d3;
+  *a = s1*a1 + s2*a2 + s3*a3;
+  *b = s1*b1 + s2*b2 + s3*b3;
+  *c = s1*c1 + s2*c2 + s3*c3;
+}
+static void STF_Apply_Sim(void) {
+  float a, b, c;
+  Polar_Fit_Sim(&a, &b, &c);
+  if (fabsf(a) < 1e-6f) { g_stfSpeed = NAN; return; }
+  float mc = g_mcTenths / 10.0f;
+  /* Signe corrige 28 juillet 2026 (meme bug que main.cpp) : v^2=(c-MC)/a, pas (c+MC)/a
+   * -- voir la derivation complete dans STF_Apply() de main.cpp. */
+  float v2 = (c - mc) / a;   /* w=0 : g_varioNetto pas simule dans le sim */
+  float vstf = (v2 > 0.0f) ? sqrtf(v2) : NAN;
+  if (!isnan(vstf) && !isnan(g_windSpeedMs) && !isnan(g_gpsTrack)) {
+    float rel      = (g_windDirDeg - g_gpsTrack) * 0.01745329f;
+    float headwind = g_windSpeedMs * cosf(rel);
+    vstf += headwind * 3.6f * 0.5f;
+  }
+  g_stfSpeed = vstf;
+}
+
 static void Labels_Apply(void) {
+  STF_Apply_Sim();
+  /* DEBUG TEMPORAIRE : trace tout changement de metrique assignee a une zone, pour
+   * diagnostiquer "Speed to Fly affiche IAS" / "Mode affiche une vitesse". */
+  {
+    static int lastCfg[6] = { -1,-1,-1,-1,-1,-1 };
+    for (int k = 0; k < 6; k++) {
+      if (g_infoBoxConfig[k] != lastCfg[k]) {
+        char m[80]; snprintf(m, sizeof(m), "zone%d g_infoBoxConfig[%d] -> %d", k, k, g_infoBoxConfig[k]);
+        DbgLog(m);
+        lastCfg[k] = g_infoBoxConfig[k];
+      }
+    }
+  }
   if (g_menuState != MENU_CLOSED && g_ibEditState == IBEDIT_NONE) return;
   for (int i = 0; i < 6; i++) {
     if (!s_ibLabels[i]) continue;
     if (g_infoBoxConfig[i] == IB_EMPTY) {
       lv_label_set_text(s_ibLabels[i], "");
-      lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
+      if (i == 5) lv_obj_align(s_ibLabels[i], LV_ALIGN_CENTER, 160, 0);
+      else        lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
       continue;
     }
     char buf[32];
+    lv_obj_set_style_text_color(s_ibLabels[i], lv_color_hex(i == 5 ? 0x1f333e : 0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
     switch (g_infoBoxConfig[i]) {
       case IB_VARIO_INST: { float v = isnan(g_varioComp) ? 0.0f : g_varioComp; float vd = g_uVert ? v*1.94384f : v;
-        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vd); break; }
+        if (i==5) snprintf(buf, sizeof(buf), "%+.1f\n%s", vd, g_uVert?"kt":"m/s");
+        else      snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vd); break; }
       case IB_VARIO_INT: { float vi = isfinite(g_varioAvg) ? g_varioAvg : 0.0f; float vid = g_uVert ? vi*1.94384f : vi;
-        snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vid); break; }
-      case IB_MACCREADY: snprintf(buf, sizeof(buf), "MC %.1f", g_mcTenths / 10.0f); break;
+        if (i==5) snprintf(buf, sizeof(buf), "%+.1f\n%s", vid, g_uVert?"kt":"m/s");
+        else      snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", vid); break; }
+      case IB_MACCREADY:
+        if (i==5) snprintf(buf, sizeof(buf), "MC\n%.1f", g_mcTenths / 10.0f);
+        else      snprintf(buf, sizeof(buf), "MC %.1f", g_mcTenths / 10.0f);
+        break;
       case IB_ALT_BARO: { float am = g_uAlt ? g_altitude*3.28084f : g_altitude; int a=(int)(am+(am>=0?0.5f:-0.5f));
-        snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a); break; }
+        if (i==5) snprintf(buf, sizeof(buf), "%d\n%s", a, g_uAlt?"ft":"m");
+        else      snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a); break; }
       case IB_ALT_GPS: { float am = g_uAlt ? g_altitude*3.28084f : g_altitude; int a=(int)(am+(am>=0?0.5f:-0.5f));
-        snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a); break; }
-      case IB_AIRSPEED: { float s = g_uSpeed ? g_airspeed*1.94384f : g_airspeed*3.6f; snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
-      case IB_GND_SPEED: { float gs = isfinite(g_gndSpeed)?g_gndSpeed:0.0f; float s = g_uSpeed ? gs*1.94384f : gs*3.6f; snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
-      case IB_TIME: snprintf(buf, sizeof(buf), "%02u:%02u:%02u", (unsigned)datetime.hour, (unsigned)datetime.minute, (unsigned)datetime.second); break;
-      case IB_FLIGHT_TIME: { unsigned long sec = g_takeoffMs ? (millis()-g_takeoffMs)/1000UL : 0UL; snprintf(buf, sizeof(buf), "%02lu:%02lu", sec/3600UL, (sec%3600UL)/60UL); break; }
-      case IB_WIND: snprintf(buf, sizeof(buf), "NW 25"); break;
-      case IB_CLIMB_GAIN: { int g=(int)(g_climbGain+(g_climbGain>=0?0.5f:-0.5f)); snprintf(buf, sizeof(buf), "%+d m", g); break; }
-      case IB_FLIGHT_LVL: { int fl=(int)((g_altitude/30.48f)+0.5f); snprintf(buf, sizeof(buf), "FL %03d", fl); break; }
+        if (i==5) snprintf(buf, sizeof(buf), "%d\n%s", a, g_uAlt?"ft":"m");
+        else      snprintf(buf, sizeof(buf), g_uAlt ? "%d ft" : "%d m", a); break; }
+      case IB_AIRSPEED: { float s = g_uSpeed ? g_airspeed*1.94384f : g_airspeed*3.6f;
+        if (i==5) snprintf(buf, sizeof(buf), "%.0f\n%s", s, g_uSpeed?"kt":"km/h");
+        else      snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
+      case IB_GND_SPEED: { float gs = isfinite(g_gndSpeed)?g_gndSpeed:0.0f; float s = g_uSpeed ? gs*1.94384f : gs*3.6f;
+        if (i==5) snprintf(buf, sizeof(buf), "%.0f\n%s", s, g_uSpeed?"kt":"km/h");
+        else      snprintf(buf, sizeof(buf), g_uSpeed ? "%.0f kt" : "%.0f km/h", s); break; }
+      case IB_TIME:
+        if (i==5) snprintf(buf, sizeof(buf), "Time\n%02u:%02u", (unsigned)datetime.hour, (unsigned)datetime.minute);
+        else      snprintf(buf, sizeof(buf), "%02u:%02u:%02u", (unsigned)datetime.hour, (unsigned)datetime.minute, (unsigned)datetime.second);
+        break;
+      case IB_FLIGHT_TIME: { unsigned long sec = g_takeoffMs ? (millis()-g_takeoffMs)/1000UL : 0UL;
+        if (i==5) snprintf(buf, sizeof(buf), "Flt\n%02lu:%02lu", sec/3600UL, (sec%3600UL)/60UL);
+        else      snprintf(buf, sizeof(buf), "%02lu:%02lu", sec/3600UL, (sec%3600UL)/60UL); break; }
+      case IB_WIND: {
+        /* Lisait une chaine figee "NW 25"/"270\n25" au lieu des vraies g_windDirDeg/
+         * g_windSpeedMs (qui, elles, bougent bien via la demo -> "vent fige" signale
+         * le 28 juillet 2026 venait de la, pas d'une demo statique). */
+        if (isnan(g_windSpeedMs)) { snprintf(buf, sizeof(buf), i==5 ? "Wind\n---" : "Wind ---"); break; }
+        float spd = g_uSpeed ? g_windSpeedMs * 1.94384f : g_windSpeedMs * 3.6f;
+        if (i==5) snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0\n%.0f", g_windDirDeg, spd);
+        else      snprintf(buf, sizeof(buf), "%03.0f\xC2\xB0 %.0f", g_windDirDeg, spd);
+        break;
+      }
+      case IB_CLIMB_GAIN: { int g=(int)(g_climbGain+(g_climbGain>=0?0.5f:-0.5f));
+        if (i==5) snprintf(buf, sizeof(buf), "%+d\nm", g);
+        else      snprintf(buf, sizeof(buf), "%+d m", g); break; }
+      case IB_FLIGHT_LVL: { int fl=(int)((g_altitude/30.48f)+0.5f);
+        if (i==5) snprintf(buf, sizeof(buf), "FL\n%03d", fl);
+        else      snprintf(buf, sizeof(buf), "FL %03d", fl); break; }
       case IB_GLIDE: { float spd=(g_airspeed>5.0f)?g_airspeed:g_gndSpeed;   /* m/s */
-        if (spd>5.5f && g_varioFused<-0.1f) { float ld=spd/(-g_varioFused); if (ld>199.0f) ld=199.0f; snprintf(buf, sizeof(buf), "L/D %.0f", ld); }
-        else snprintf(buf, sizeof(buf), "L/D ---"); break; }
+        if (spd>5.5f && g_varioFused<-0.1f) { float ld=spd/(-g_varioFused); if (ld>199.0f) ld=199.0f;
+          if (i==5) snprintf(buf, sizeof(buf), "L/D\n%.0f", ld); else snprintf(buf, sizeof(buf), "L/D %.0f", ld); }
+        else snprintf(buf, sizeof(buf), i==5 ? "L/D\n---" : "L/D ---"); break; }
+      case IB_MODE:
+        /* g_circling (etat de vol reel), pas g_ibEditCruiseMode (dernier choix manuel dans
+         * l'editeur, jamais mis a jour en vol -> "reste fige Climb" signale). */
+        snprintf(buf, sizeof(buf), g_circling ? "Climb" : "Cruise");
+        break;
+      case IB_ALERTS: {
+        /* STUB : g_linkOk/FlightLog_SdOk/BAT_analogVolts n'existent pas dans le simulateur
+         * (specifiques au vrai materiel) -> force "actif" en permanence pour verifier
+         * visuellement le clignotement jaune/rouge, cf. le vrai code dans main.cpp. */
+        snprintf(buf, sizeof(buf), "TEST!");
+        lv_obj_set_style_text_color(s_ibLabels[i],
+          lv_color_hex(((millis() / 600) % 2 == 0) ? 0xfbd500 : 0xff0000), LV_PART_MAIN | LV_STATE_DEFAULT);
+        break;
+      }
+      case IB_STF: {   /* cible STF en jaune + vitesse actuelle en blanc, port fidele de main.cpp */
+        if (isnan(g_stfSpeed)) { snprintf(buf, sizeof(buf), "STF ---"); break; }
+        float target = g_uSpeed ? g_stfSpeed * 0.539957f : g_stfSpeed;
+        float curMs  = (g_airspeed > 5.0f) ? g_airspeed : g_gndSpeed;
+        float cur    = g_uSpeed ? curMs * 1.94384f : curMs * 3.6f;
+        if (i == 5) snprintf(buf, sizeof(buf), "#fbd500 %.0f#\n%.0f", target, cur);
+        else        snprintf(buf, sizeof(buf), "#fbd500 %.0f#  %.0f %s", target, cur, g_uSpeed ? "kt" : "km/h");
+        break;
+      }
       default: buf[0]='\0'; break;
     }
     lv_label_set_text(s_ibLabels[i], buf);
-    lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
+    if (i == 5) lv_obj_align(s_ibLabels[i], LV_ALIGN_CENTER, 160, 0);
+    else        lv_obj_align(s_ibLabels[i], LV_ALIGN_TOP_MID, 0, IB_LABEL_Y[i]);
   }
   if (objects.img_gps) {
     static int lastGps = -1; int g = g_gpsOk ? 1 : 0;
@@ -1759,7 +1922,6 @@ static void SimMenu_FeedDemoTelemetry(double t) {
 /* ---- Ecran QR code (partage WiFi "App connect"), port fidele de main.cpp ---- */
 static lv_obj_t* s_qrCode = NULL;
 static bool      g_qrOpen = false;
-static bool      s_qrServerWasActive = false;
 
 /* DEBUG TEMPORAIRE : trace la sequence app connect / QR pour diagnostiquer le bug signale. */
 static void DbgLog(const char* msg) {
@@ -1794,11 +1956,10 @@ static void QrScreen_Close(void) {
   g_qrOpen = false;
   DbgLog("QrScreen_Close APRES");
 }
+/* App connect ON/OFF ne montre plus le QR tout seul (voir main.cpp) -- ferme juste
+ * l'overlay si le serveur tombe pendant qu'il est affiche. */
 static void QrScreen_Tick(void) {
-  bool active = FlightLog_ServerActive();
-  if (active && !s_qrServerWasActive) { DbgLog("QrScreen_Tick: rising edge -> Show"); QrScreen_Show(); }
-  else if (!active && g_qrOpen)       { DbgLog("QrScreen_Tick: server off -> force Close"); QrScreen_Close(); }
-  s_qrServerWasActive = active;
+  if (!FlightLog_ServerActive() && g_qrOpen) { DbgLog("QrScreen_Tick: server off -> force Close"); QrScreen_Close(); }
 }
 
 static void menu_onButton(void) {
@@ -1856,6 +2017,11 @@ void SimMenu_Tick(double t) {
   RTC_Loop();
   SimMenu_FeedDemoTelemetry(t);
   Comp_Apply();
+  // Port de l'auto-switch de main.cpp : jamais fait dans le simu -> g_infoBoxConfig (et donc
+  // Mode) restait colle sur Cruise en permanence, meme pendant les phases de spirale demo.
+  if (g_ibEditState == IBEDIT_NONE) {
+    g_infoBoxConfig = g_circling ? g_ibConfigClimb : g_ibConfigCruise;
+  }
   AvgClimb_Apply();
   ClimbGain_Apply();
   Needles_Apply();
@@ -1884,6 +2050,7 @@ void SimMenu_Tick(double t) {
   Menu_Apply();
   SetupMenu_Apply();
   QrScreen_Tick();
+  Info_Tick();
 }
 
 /* ENC1 = rotation navigation/edition (setup + quick menu + MacCready) */

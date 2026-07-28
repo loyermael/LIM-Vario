@@ -572,7 +572,11 @@ enum { SET_NONE, SET_HELPER, SET_BRIGHT, SET_VOLUME, SET_SINK, SET_LOGGER, SET_C
        SET_GLIDER_MODEL, SET_GLIDER_EMPTY_WT, SET_GLIDER_MAX_BAL, SET_GLIDER_V1, SET_GLIDER_SI1, SET_GLIDER_V2, SET_GLIDER_SI2, SET_GLIDER_V3, SET_GLIDER_SI3,
        SET_PROFILE_SELECT, SET_PROFILE_EDIT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
 
-#define LIM_FW_SCREEN "0.9.0"   // screen firmware version (About menu)
+// Screen firmware version (About menu). Generated at build time from Shared/VERSION +
+// git commit hash by Shared/version_gen.py (see extra_scripts in platformio.ini) -> never
+// edit this by hand, it would just get overwritten (or worse, drift silently) on the next
+// build. Bump the MAJOR.MINOR.PATCH milestone in Shared/VERSION instead.
+#define LIM_FW_SCREEN LIM_FW_VERSION
 
 typedef struct { const char* label; uint8_t type; uint8_t arg; } SmItem;
 typedef struct { const char* title; const SmItem* items; uint8_t n; } SmMenu;

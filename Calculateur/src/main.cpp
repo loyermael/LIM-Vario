@@ -1,7 +1,7 @@
 /* ============================================================
  *  L!M Vario - CALCULATOR UNIT (ESP32 DevKit V4)
- *  V0.9 : BMP388 -> altitude + instantaneous/integrated vario,
- *         2 rotary encoders read locally, all streamed to display via UART.
+ *  BMP388 -> altitude + instantaneous/integrated vario,
+ *  2 rotary encoders read locally, all streamed to display via UART.
  *
  *  -> MS4525 airspeed sensor is AUTO-DETECTED: unequipped = uncompensated
  *     barometric vario; connected later = total energy (TE) compensation
@@ -153,7 +153,10 @@ void setup() {
   Serial.begin(115200);                                   // USB debug serial port
   Serial2.begin(LIM_BAUD, SERIAL_8N1, LINK_RX, LINK_TX);  // Inter-processor UART link to display
   delay(300);
-  Serial.println("\n=== L!M Vario - Calculator Unit V0.9 ===");
+  // LIM_FW_VERSION: generated at build time from Shared/VERSION + git hash by
+  // Shared/version_gen.py (see extra_scripts in platformio.ini) -> bump the milestone
+  // number in Shared/VERSION when you want to, the commit suffix takes care of itself.
+  Serial.printf("\n=== L!M Vario - Calculator Unit v%s ===\n", LIM_FW_VERSION);
 
   // --- I2C + BMP388 Barometric Sensor ---
   I2C_BusRecover();

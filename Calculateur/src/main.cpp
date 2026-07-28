@@ -42,7 +42,7 @@
 
 // Encoder rotation inversion: 1 = inverted direction
 #define ENC1_REVERSE 0
-#define ENC2_REVERSE 0
+#define ENC2_REVERSE 1
 
 // WiFi GPS AP bridge: 0 = disabled (no AP broadcast). 1 = active.
 #define GPS_WIFI 1

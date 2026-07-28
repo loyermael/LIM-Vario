@@ -259,6 +259,25 @@ void GpsLink_Loop(void)
 {
   if (!g_up) return;
 
+  // Hot-reconnect: gpsSerialBegin() (baud auto-detect) only ever ran once, at boot.
+  // The 10 Hz/115200 config it pushes to the module lives in RAM only (layers=RAM in the
+  // UBX-CFG-VALSET call), not saved to the module's flash -> a real power loss on the GPS
+  // (not just a data-line blip) makes it boot back up at its own default baud (9600),
+  // and the calc had no way to notice or re-sync short of its own reset. Same class of
+  // bug as the BMP388/MS4525 fix earlier.
+  // Unlike those (near-instant probes), gpsSerialBegin() blocks up to ~1.05s (350ms x 3
+  // baud candidates) -> retrying it stalls the main loop (vario update, encoders) for
+  // that long. Spaced at 15s instead of the sensors' 3s to keep that hiccup rare; only
+  // happens at all while the GPS is actually absent.
+  if (!g_hwGps) {
+    static uint32_t lastRetryMs = 0;
+    uint32_t nowMs = millis();
+    if (nowMs - lastRetryMs >= 15000) {
+      lastRetryMs = nowMs;
+      gpsSerialBegin();
+    }
+  }
+
   // 0) PHYSICAL GPS (GPSM10 on UART1) - real-flight source, 10 Hz NMEA
   gpsSerialLoop();
 

@@ -650,6 +650,7 @@ static const SmItem IBIT_LIST[] = {
   {"Ground Speed", ST_INFO, IB_GND_SPEED}, {"Speed to Fly", ST_INFO, IB_STF},
   {"Alerts", ST_INFO, IB_ALERTS}, {"Mode", ST_INFO, IB_MODE},
   {"Disabled", ST_INFO, IB_EMPTY},
+  {"Netto", ST_INFO, IB_NETTO},
   {"Back", ST_BACK, 0}
 };
 static const SmItem CI_LIST[] = {
@@ -680,7 +681,7 @@ static const SmItem PRIT[] = {
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
   {"System",SYIT,7},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,18}
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,19}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -752,7 +753,7 @@ static void Profile_SelectNext(int d) {
   Profile_Load(g_profileIdx);
 }
 static lv_obj_t* s_imName[3] = {0}; static lv_obj_t* s_imVal[3] = {0};
-static lv_obj_t* s_ibListNames[18] = {0}; static lv_obj_t* s_ibListVals[18] = {0};
+static lv_obj_t* s_ibListNames[19] = {0}; static lv_obj_t* s_ibListVals[19] = {0};
 static lv_obj_t* s_ciListNames[4] = {0}; static lv_obj_t* s_ciListVals[4] = {0};
 
 // Etat de confirmation (reset config / factory reset)
@@ -1576,7 +1577,8 @@ static void SetupMenu_Init()
   s_ibListNames[14] = objects.ibname15;  // "Alerts"
   s_ibListNames[15] = objects.ibname16;  // "Mode"
   s_ibListNames[16] = objects.ibname17;  // "Disabled"
-  s_ibListNames[17] = objects.ibname18;  // "Back"
+  s_ibListNames[17] = objects.ibname18;  // "Netto vario"
+  s_ibListNames[18] = objects.ibname19;  // "Back" (renumbered when Netto was inserted before it)
 
   s_ciListNames[0] = objects.cname0;
   s_ciListNames[1] = objects.cname1;
@@ -2432,25 +2434,16 @@ static float g_windAvgDir    = NAN; // AVERAGED direction (deg)
 // Arrow size follows wind strength: never shrunk to near-invisible at 0 wind (floor),
 // already at full size well before "a lot of wind" (saturates, doesn't keep growing).
 // LVGL zoom unit: 256 = 100% (native EEZ size).
-#define WIND_ZOOM_MIN         160      // floor size at 0 wind (~62%)
-#define WIND_ZOOM_MAX         256      // full size, reached at/above the saturation speed
-#define WIND_ZOOM_SAT_MS       8.0f    // m/s (~29 km/h) -- speed at which live/avg arrows hit full size
-#define ENERGY_ZOOM_SAT_MAG     6.0f   // g_energyMag (already scale-adjusted) at which the energy arrow hits full size
+// Arrows used to scale with wind/energy magnitude (WindArrowZoom(), removed 28 July 2026 --
+// Damien didn't like the size changing with speed) -> fixed at native size now. The
+// direction (angle) is still what carries the information.
+#define WIND_ZOOM_MAX         256
 
 // Live + avg overlap enough on their own (same pivot); the energy arrow only adds to the
 // clutter for a real signal, so it stays hidden until the drift is clearly non-trivial
 // rather than showing for the slightest wobble (EnergyArrow_Apply's own 0.05 m/s cutoff
 // is just a numerical guard for atan2, not a "worth showing" threshold).
 #define ENERGY_SHOW_MIN         2.0f   // g_energyMag floor to actually display the arrow
-
-// Maps a magnitude to an arrow zoom value, floored at WIND_ZOOM_MIN and saturating at satAt.
-static uint16_t WindArrowZoom(float mag, float satAt)
-{
-  if (isnan(mag) || mag <= 0.0f) return WIND_ZOOM_MIN;
-  float t = mag / satAt;
-  if (t > 1.0f) t = 1.0f;
-  return (uint16_t)(WIND_ZOOM_MIN + t * (WIND_ZOOM_MAX - WIND_ZOOM_MIN));
-}
 
 // Blends a new per-turn wind estimate into a smoothed one (k = blend weight in [0..1]),
 // handling the circular wrap of the direction. Higher k = more reactive.
@@ -2596,7 +2589,7 @@ static void WindDisplay_Update()
       while (rel <   0.0f) rel += 360.0f;
       while (rel >= 360.0f) rel -= 360.0f;
       lv_img_set_angle(objects.img_wind_arrow_avg, (int16_t)(rel * 10.0f));
-      lv_img_set_zoom(objects.img_wind_arrow_avg, WindArrowZoom(g_windAvgSpeed, WIND_ZOOM_SAT_MS));
+      lv_img_set_zoom(objects.img_wind_arrow_avg, WIND_ZOOM_MAX);
       lv_obj_clear_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
@@ -2612,7 +2605,7 @@ static void WindDisplay_Update()
       while (rel <   0.0f) rel += 360.0f;
       while (rel >= 360.0f) rel -= 360.0f;
       lv_img_set_angle(objects.img_wind_arrow_energy, (int16_t)(rel * 10.0f));
-      lv_img_set_zoom(objects.img_wind_arrow_energy, WindArrowZoom(g_energyMag, ENERGY_ZOOM_SAT_MAG));
+      lv_img_set_zoom(objects.img_wind_arrow_energy, WIND_ZOOM_MAX);
       lv_obj_clear_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);

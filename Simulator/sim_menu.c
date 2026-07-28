@@ -298,6 +298,7 @@ static const SmItem IBIT_LIST[] = {
   {"Ground Speed", ST_INFO, IB_GND_SPEED}, {"Speed to Fly", ST_INFO, IB_STF},
   {"Alerts", ST_INFO, IB_ALERTS}, {"Mode", ST_INFO, IB_MODE},
   {"Disabled", ST_INFO, IB_EMPTY},
+  {"Netto", ST_INFO, IB_NETTO},
   {"Back", ST_BACK, 0}
 };
 static const SmItem CI_LIST[] = { {"Thermal Helper",ST_INFO,0},{"Wind Direction",ST_INFO,1},{"Disabled",ST_INFO,2},{"Back",ST_BACK,0} };
@@ -312,7 +313,7 @@ static const SmItem PRIT[] = { {"Profile",ST_CHOICE,SET_PROFILE_SELECT},{"Edit",
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
   {"System",SYIT,7},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
-  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,18}
+  {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,19}
 };
 
 static uint8_t g_smMenu = SM_ROOT;
@@ -331,7 +332,7 @@ static lv_obj_t* s_abName[4] = {0}; static lv_obj_t* s_abVal[4]  = {0};
 static lv_obj_t* s_glName[10] = {0};static lv_obj_t* s_glVal[10]  = {0};
 static lv_obj_t* s_prName[6]  = {0};static lv_obj_t* s_prVal[6]   = {0};
 static lv_obj_t* s_imName[3] = {0}; static lv_obj_t* s_imVal[3] = {0};
-static lv_obj_t* s_ibListNames[18] = {0}; static lv_obj_t* s_ibListVals[18] = {0};
+static lv_obj_t* s_ibListNames[19] = {0}; static lv_obj_t* s_ibListVals[19] = {0};
 static lv_obj_t* s_ciListNames[4] = {0};  static lv_obj_t* s_ciListVals[4] = {0};
 
 static lv_obj_t* s_confirmPanel = NULL;
@@ -972,6 +973,7 @@ static void SetupMenu_Init(void) {
   s_ibListNames[9]=objects.ibname9; s_ibListNames[10]=objects.ibname10; s_ibListNames[11]=objects.ibname11;
   s_ibListNames[12]=objects.ibname13; s_ibListNames[13]=objects.ibname14; s_ibListNames[14]=objects.ibname15;
   s_ibListNames[15]=objects.ibname16; s_ibListNames[16]=objects.ibname17; s_ibListNames[17]=objects.ibname18;
+  s_ibListNames[18]=objects.ibname19; /* "Back", renumerote quand Netto a ete insere avant */
 
   s_ciListNames[0]=objects.cname0; s_ciListNames[1]=objects.cname1; s_ciListNames[2]=objects.cname2; s_ciListNames[3]=objects.prname5_1;
 
@@ -1331,20 +1333,11 @@ static float g_energyMag    = NAN;
 // Taille des fleches en fonction du vent : jamais quasi-invisible a 0 vent (plancher),
 // deja a taille max bien avant "beaucoup de vent" (sature, ne grossit plus apres).
 // Unite de zoom LVGL : 256 = 100% (taille native EEZ). Memes constantes que main.cpp.
-#define WIND_ZOOM_MIN         160
+// Taille fixe desormais (WindArrowZoom retiree 28 juillet 2026, meme changement que
+// main.cpp -- Damien n'aimait pas que la taille varie avec le vent).
 #define WIND_ZOOM_MAX         256
-#define WIND_ZOOM_SAT_MS       8.0f
-#define ENERGY_ZOOM_SAT_MAG     6.0f
 #define ENERGY_ARROW_SCALE      3.5f
 #define ENERGY_SHOW_MIN         2.0f   // meme seuil que main.cpp -- cache l'energy tant que la derive n'est pas nette
-
-static uint16_t WindArrowZoom(float mag, float satAt)
-{
-  if (isnan(mag) || mag <= 0.0f) return WIND_ZOOM_MIN;
-  float t = mag / satAt;
-  if (t > 1.0f) t = 1.0f;
-  return (uint16_t)(WIND_ZOOM_MIN + t * (WIND_ZOOM_MAX - WIND_ZOOM_MIN));
-}
 
 /* ============================================================
  *  THERMAL HELPER -- port de Firmware/src/ThermalHelper.{h,cpp} + ThermalDraw.{h,cpp}
@@ -1600,14 +1593,29 @@ static void Polar_Fit_Sim(float* a, float* b, float* c) {
   *b = s1*b1 + s2*b2 + s3*b3;
   *c = s1*c1 + s2*c2 + s3*c3;
 }
+static float g_varioNetto = NAN;
+// Port de Polar_Sink()/Netto_Apply() (main.cpp). g_airspeed reste a 0 en permanence dans
+// le simu (pas de pitot simule) -> g_varioNetto restera NAN/"---", comme sur le vrai
+// firmware sans MS4525. Implementee proprement quand meme, pour que le comportement soit
+// honnete plutot qu'un stub qui affiche un chiffre inexistant.
+static float Polar_Sink_Sim(float v_kmh) {
+  float a, b, c;
+  Polar_Fit_Sim(&a, &b, &c);
+  return a*v_kmh*v_kmh + b*v_kmh + c;
+}
+static void Netto_Apply_Sim(void) {
+  g_varioNetto = (g_airspeed > 5.0f) ? (g_varioComp - Polar_Sink_Sim(g_airspeed)) : NAN;
+}
 static void STF_Apply_Sim(void) {
   float a, b, c;
   Polar_Fit_Sim(&a, &b, &c);
   if (fabsf(a) < 1e-6f) { g_stfSpeed = NAN; return; }
   float mc = g_mcTenths / 10.0f;
-  /* Signe corrige 28 juillet 2026 (meme bug que main.cpp) : v^2=(c-MC)/a, pas (c+MC)/a
-   * -- voir la derivation complete dans STF_Apply() de main.cpp. */
-  float v2 = (c - mc) / a;   /* w=0 : g_varioNetto pas simule dans le sim */
+  /* Signe corrige 28 juillet 2026 (meme bug que main.cpp) : v^2=(c-MC+w)/a, pas (c+MC-w)/a
+   * -- voir la derivation complete dans STF_Apply() de main.cpp. w=g_varioNetto, NAN->0
+   * (reste NAN en pratique dans le simu, pas de pitot simule -> w=0 de fait). */
+  float w  = isnan(g_varioNetto) ? 0.0f : g_varioNetto;
+  float v2 = (c - mc + w) / a;
   float vstf = (v2 > 0.0f) ? sqrtf(v2) : NAN;
   if (!isnan(vstf) && !isnan(g_windSpeedMs) && !isnan(g_gpsTrack)) {
     float rel      = (g_windDirDeg - g_gpsTrack) * 0.01745329f;
@@ -1618,6 +1626,7 @@ static void STF_Apply_Sim(void) {
 }
 
 static void Labels_Apply(void) {
+  Netto_Apply_Sim();
   STF_Apply_Sim();
   /* DEBUG TEMPORAIRE : trace tout changement de metrique assignee a une zone, pour
    * diagnostiquer "Speed to Fly affiche IAS" / "Mode affiche une vitesse". */
@@ -1692,6 +1701,16 @@ static void Labels_Apply(void) {
         if (spd>5.5f && g_varioFused<-0.1f) { float ld=spd/(-g_varioFused); if (ld>199.0f) ld=199.0f;
           if (i==5) snprintf(buf, sizeof(buf), "L/D\n%.0f", ld); else snprintf(buf, sizeof(buf), "L/D %.0f", ld); }
         else snprintf(buf, sizeof(buf), i==5 ? "L/D\n---" : "L/D ---"); break; }
+      case IB_NETTO: {
+        if (isnan(g_varioNetto)) {
+          snprintf(buf, sizeof(buf), i==5 ? "---\n%s" : "--- %s", g_uVert?"kt":"m/s");
+          break;
+        }
+        float v = g_uVert ? g_varioNetto*1.94384f : g_varioNetto;
+        if (i==5) snprintf(buf, sizeof(buf), "%+.1f\n%s", v, g_uVert?"kt":"m/s");
+        else      snprintf(buf, sizeof(buf), g_uVert ? "%+.1f kt" : "%+.1f m/s", v);
+        break;
+      }
       case IB_MODE:
         /* g_circling (etat de vol reel), pas g_ibEditCruiseMode (dernier choix manuel dans
          * l'editeur, jamais mis a jour en vol -> "reste fige Climb" signale). */
@@ -1789,7 +1808,7 @@ static void WindDisplay_Update(void) {
       while (rel <   0.0f) rel += 360.0f;
       while (rel >= 360.0f) rel -= 360.0f;
       lv_img_set_angle(objects.img_wind_arrow_avg, (int16_t)(rel * 10.0f));
-      lv_img_set_zoom(objects.img_wind_arrow_avg, WindArrowZoom(g_windAvgSpeed, WIND_ZOOM_SAT_MS));
+      lv_img_set_zoom(objects.img_wind_arrow_avg, WIND_ZOOM_MAX);
       lv_obj_clear_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(objects.img_wind_arrow_avg, LV_OBJ_FLAG_HIDDEN);
@@ -1804,7 +1823,7 @@ static void WindDisplay_Update(void) {
       while (rel <   0.0f) rel += 360.0f;
       while (rel >= 360.0f) rel -= 360.0f;
       lv_img_set_angle(objects.img_wind_arrow_energy, (int16_t)(rel * 10.0f));
-      lv_img_set_zoom(objects.img_wind_arrow_energy, WindArrowZoom(g_energyMag, ENERGY_ZOOM_SAT_MAG));
+      lv_img_set_zoom(objects.img_wind_arrow_energy, WIND_ZOOM_MAX);
       lv_obj_clear_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(objects.img_wind_arrow_energy, LV_OBJ_FLAG_HIDDEN);

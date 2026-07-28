@@ -161,7 +161,7 @@ typedef struct _objects_t {
     lv_obj_t *cname2;
     lv_obj_t *prname5_1;
     lv_obj_t *infobox_list;
-    lv_obj_t *ibname18;
+    lv_obj_t *ibname19;
     lv_obj_t *ibname0;
     lv_obj_t *ibname1;
     lv_obj_t *ibname2;
@@ -179,6 +179,7 @@ typedef struct _objects_t {
     lv_obj_t *ibname15;
     lv_obj_t *ibname16;
     lv_obj_t *ibname17;
+    lv_obj_t *ibname18;
     lv_obj_t *infobox_editor_container;
     lv_obj_t *ib_frame_0;
     lv_obj_t *ib_val_0;

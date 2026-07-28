@@ -15,13 +15,14 @@
 
 #define LIM_SYNC0    0xA5
 #define LIM_SYNC1    0x5A
-#define LIM_VERSION  5           // v5 : added gps_lat + gps_lon (position, for flight log)
+#define LIM_VERSION  6           // v6 : added mag_x/y/z (LIS3MDL, raw uT -> display-side AHRS fusion)
 #define LIM_BAUD     115200      // UART link baud rate (reliable across both ESP32s)
 
 // Flags field bits (Calculator -> Display frame)
 #define LIM_FLAG_BMP_OK   0x01   // BMP388 read successfully
 #define LIM_FLAG_SPD_OK   0x02   // MS4525 present -> TE compensated vario
 #define LIM_FLAG_GPS_OK   0x04   // Valid GPS fix -> airspeed = GPS ground speed
+#define LIM_FLAG_MAG_OK   0x08   // LIS3MDL present -> mag_x/y/z valid (raw, uncalibrated)
 
 // Cmd field bits (Display -> Calculator frame)
 #define LIM_CMD_SINK_SOUND 0x01  // 1 = sink tone active (Full), 0 = silent (Mute)
@@ -42,6 +43,9 @@ typedef struct {
   float    gnd_speed;   // GPS ground speed, same unit as airspeed (0 if no fix)
   float    gps_lat;     // latitude, decimal degrees +N/-S (NaN if no fix)
   float    gps_lon;     // longitude, decimal degrees +E/-W (NaN if no fix)
+  float    mag_x;       // magnetic field, uT, sensor frame, RAW/uncalibrated (0 if LIS3MDL absent)
+  float    mag_y;       // no tilt/hard/soft-iron compensation applied here -> the display (which
+  float    mag_z;       // owns the IMU and the AHRS fusion) is where that belongs, not the calculator
   int32_t  enc1_count;  // cumulative encoder 1 step count
   int32_t  enc2_count;  // cumulative encoder 2 step count
   uint8_t  enc1_btn;    // encoder 1 button state (1 = pressed)

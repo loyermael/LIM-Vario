@@ -17,6 +17,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_BMP3XX.h>
+#include <Adafruit_LIS3MDL.h>
 #include <ESP32Encoder.h>
 #include "MS4525DO.h"
 #include "lim_link.h"        // Shared IPC protocol (../Shared)
@@ -53,8 +54,10 @@
 // ---- Sensor Handlers ----
 Adafruit_BMP3XX bmp;
 MS4525DO        ms4525(0x28);
+Adafruit_LIS3MDL mag;
 static bool     bmpOk    = false;
 static bool     hasSpeed = false;
+static bool     magOk    = false;
 
 // ---- Encoders ----
 ESP32Encoder enc1, enc2;
@@ -131,6 +134,21 @@ static void I2C_BusRecover() {
   Serial.printf("[i2c] recovery %s\n", digitalRead(PIN_SDA) == HIGH ? "OK" : "FAILED");
 }
 
+// LIS3MDL magnetometer, shared bus (0x1C default, 0x1E if SDO strapped high). No calibration
+// or tilt compensation here -> see mag_x/y/z comment in lim_link.h, this only brings the raw
+// field up to the display, which owns the IMU and the AHRS fusion.
+static bool TryInitMag() {
+  bool ok = mag.begin_I2C(0x1C);
+  if (!ok) ok = mag.begin_I2C(0x1E);
+  if (ok) {
+    mag.setPerformanceMode(LIS3MDL_MEDIUMMODE);
+    mag.setOperationMode(LIS3MDL_CONTINUOUSMODE);
+    mag.setDataRate(LIS3MDL_DATARATE_155_HZ);
+    mag.setRange(LIS3MDL_RANGE_4_GAUSS);
+  }
+  return ok;
+}
+
 void setup() {
   Serial.begin(115200);                                   // USB debug serial port
   Serial2.begin(LIM_BAUD, SERIAL_8N1, LINK_RX, LINK_TX);  // Inter-processor UART link to display
@@ -159,6 +177,14 @@ void setup() {
   }
   Serial.println(hasSpeed ? "MS4525 present -> TE compensation active"
                           : "MS4525 absent -> uncompensated baro vario");
+
+  // --- LIS3MDL Magnetometer (Auto-detected) ---
+  for (int attempt = 0; attempt < 5 && !magOk; attempt++) {
+    if (attempt > 0) delay(100);
+    magOk = TryInitMag();
+  }
+  Serial.println(magOk ? "LIS3MDL present -> raw field streamed to display"
+                       : "LIS3MDL absent -> no magnetic heading");
 
   // --- Encoders ---
   ESP32Encoder::useInternalWeakPullResistors = puType::up;
@@ -253,13 +279,14 @@ void loop() {
   // own (it's only called at boot) -> a currently-absent sensor would stay "NOT FOUND" for
   // the rest of the session even once the wiring is fixed. Re-probe every 3 s until it
   // succeeds; harmless once bmpOk/hasSpeed are true (the check short-circuits immediately).
-  if (!bmpOk || !hasSpeed) {
+  if (!bmpOk || !hasSpeed || !magOk) {
     static uint32_t lastRetryMs = 0;
     uint32_t nowMs = millis();
     if (nowMs - lastRetryMs >= 3000) {
       lastRetryMs = nowMs;
       if (!bmpOk && TryInitBmp())     { bmpOk = true;    Serial.println("BMP388 OK (hot reconnect)"); }
       if (!hasSpeed && ms4525.begin()){ hasSpeed = true;  Serial.println("MS4525 present (hot reconnect) -> TE compensation active"); }
+      if (!magOk && TryInitMag())     { magOk = true;    Serial.println("LIS3MDL present (hot reconnect) -> raw field streamed to display"); }
     }
   }
 
@@ -372,6 +399,15 @@ void loop() {
     }
   }
 
+  // --- LIS3MDL Magnetometer -> raw field, streamed as-is (see mag_x/y/z in lim_link.h) ---
+  float mx = 0.0f, my = 0.0f, mz = 0.0f;
+  if (magOk) {
+    sensors_event_t e;
+    if (mag.getEvent(&e)) {
+      mx = e.magnetic.x; my = e.magnetic.y; mz = e.magnetic.z;   // uT
+    }
+  }
+
   if (gotBaro) {
     if (isnan(alt_f)) alt_f = alt;
     // Startup stabilization delay (~2 s): BMP sensor + hardware IIR filters settle down.
@@ -459,6 +495,9 @@ void loop() {
   pkt.gps_track  = gpsOk ? GpsLink_Track() : NAN;   // Ground track heading for circling/wind UI
   pkt.gps_lat    = gpsOk ? GpsLink_Lat() : NAN;     // Position, for flight log only (no UI use yet)
   pkt.gps_lon    = gpsOk ? GpsLink_Lon() : NAN;
+  pkt.mag_x      = mx;                              // Raw field, uT. 0/0/0 if LIS3MDL absent
+  pkt.mag_y      = my;                              // (LIM_FLAG_MAG_OK distinguishes that from
+  pkt.mag_z      = mz;                              // a genuine all-zero reading).
 #if SIM_VARIO
   gpsOk          = true;           // SIM provides heading + speed -> activates circling mode on display
   pkt.airspeed   = 25.0f;          // Constant airspeed (dV/dt ~ 0, avoids false TE compensation spikes)
@@ -486,6 +525,7 @@ void loop() {
   if (bmpOk)    flags |= LIM_FLAG_BMP_OK;
   if (hasSpeed) flags |= LIM_FLAG_SPD_OK;
   if (gpsOk)    flags |= LIM_FLAG_GPS_OK;
+  if (magOk)    flags |= LIM_FLAG_MAG_OK;
   lim_finalize(&pkt, flags);
   Serial2.write((const uint8_t*)&pkt, sizeof(pkt));
 

@@ -69,6 +69,13 @@ static volatile float g_gpsLat     = NAN;    // latitude GPS (deg decimaux, +N/-
 static volatile float g_gpsLon     = NAN;    // longitude GPS (deg decimaux, +E/-W ; NaN si pas de fix)
 static volatile bool  g_gpsOk      = false;  // flag fix GPS valide (recu du calculateur)
 static volatile float g_gpsTrack   = NAN;    // cap sol GPS (deg 0..360, NaN si pas de fix)
+// LIS3MDL magnetometer (calculateur, bus I2C partage). Champ brut non calibre, aucune
+// compensation d'assiette ici -> pas encore de cap magnetique exploitable, juste la
+// plomberie liaison -> reception. Fusion avec l'IMU (deja sur cette carte) a faire plus tard.
+static volatile float g_magX       = 0.0f;   // champ magnetique, uT, repere capteur
+static volatile float g_magY       = 0.0f;
+static volatile float g_magZ       = 0.0f;
+static volatile bool  g_magOk      = false;  // LIS3MDL detecte cote calculateur
 static volatile bool  g_circling   = false;  // true = spiral detected (else straight flight)
 static volatile int   g_turnDir    = 0;      // turn direction: +1 right / -1 left / 0
 static float g_varioFiltered = NAN;   // vario apres filtre utilisateur (Fast/Med/Slow), EMA
@@ -2061,6 +2068,10 @@ static void Link_Poll()
         g_gpsTrack = p->gps_track;
         g_gpsLat   = p->gps_lat;
         g_gpsLon   = p->gps_lon;
+        g_magOk    = (p->flags & LIM_FLAG_MAG_OK) != 0;
+        g_magX     = p->mag_x;
+        g_magY     = p->mag_y;
+        g_magZ     = p->mag_z;
         // Reconnection: resync the command state (sink sound + Condor sim) to the calculator
         if (!g_linkOk) {
           Cmd_SendState();

@@ -57,3 +57,17 @@ void VarioFusion_SetMagHeading(float magHeadingDeg, bool valid);
 // Meaningless (pure gyro-integrated, drifting) until VarioFusion_SetMagHeading() has
 // been fed valid data at least once.
 float VarioFusion_GetHeading(void);
+
+// Feeds the latest known pitot airspeed (m/s, density-corrected TAS) into the horizontal
+// Kalman filter used for total-energy compensation (see VarioFusion_GetCompTerm()). Pass
+// valid=false when no pitot is present -- Comp_Apply() then falls back to the classic
+// GPS-ground-speed-derivative method instead of calling VarioFusion_GetCompTerm().
+void VarioFusion_SetAirspeed(float tasMs, bool valid);
+
+// Total-energy compensation term, ready to add to the raw vario: V_filtered * A_debiased / g.
+// Unlike a plain "TAS * a_forward / g" computation, this comes from a 3-state Kalman filter
+// {V, A, accelerometer bias} (same structure as the vertical vario's own bias state) that
+// continuously separates true forward acceleration from a slowly-drifting accelerometer
+// offset, using the pitot airspeed as an independent reference. Returns 0.0f until
+// VarioFusion_SetAirspeed() has fed a valid reading at least once.
+float VarioFusion_GetCompTerm(void);

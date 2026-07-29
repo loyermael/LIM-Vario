@@ -2340,17 +2340,19 @@ static void Menu_Apply()
 
 // Total-energy compensation (inertial) : vario_comp = vario_fused + compensation.
 //  compensation = (V_air . a)/g  ~=  TAS * a_forward / g   (MS4525 airspeed + IMU accel)
-// The along-track acceleration is measured DIRECTLY by the IMU (VarioFusion_GetFwdAccel),
-// instead of differentiating the noisy airspeed signal -> instantaneous, low-noise TE
-// compensation -> instantaneous and low-noise (no numerical differentiation of airspeed).
-// Without a pitot (no MS4525) -> fall back to the classic GPS ground-speed derivative.
+// The along-track acceleration is measured DIRECTLY by the IMU, instead of differentiating
+// the noisy airspeed signal -> instantaneous, low-noise TE compensation. Since today's
+// session: this V/A pair is fused through a dedicated 3-state Kalman filter (see
+// VarioFusion_GetCompTerm()/VarioFusion_SetAirspeed()) that also estimates and removes a
+// slowly-drifting accelerometer bias -- same principle as the vertical vario's own bias
+// state, applied along-track. Without a pitot (no MS4525) -> fall back to the classic GPS
+// ground-speed derivative (unchanged, no Kalman there).
 static void Comp_Apply()
 {
   // Condor mode: g_vario is already the Condor evario (TE-compensated sim-side). Bypass fusion.
   if (g_condorSim) { g_varioComp = isnan(g_vario) ? 0.0f : g_vario; return; }
 
   static uint32_t lastUs = 0;
-  static float    termF  = 0.0f;              // smoothed compensation term
   static float    vF = 0.0f, vPrev = 0.0f;    // GPS fallback derivative state
   float base = isnan(g_varioFused) ? 0.0f : g_varioFused;
 
@@ -2362,23 +2364,23 @@ static void Comp_Apply()
 
   float term = 0.0f;
   if (g_airspeed > 5.0f) {
-    // --- Scalar-product method: TAS * a_forward / g (IMU acceleration, no differentiation) ---
-    float aFwd = VarioFusion_GetFwdAccel();           // m/s^2, along the flight path
-    float raw  = g_airspeed * aFwd / 9.80665f;        // == (V/g)*dV/dt, but noise-free
-    termF += (raw - termF) * (dt / (0.4f + dt));      // light smoothing vs IMU vibration
-    term = termF;
+    // --- Horizontal Kalman filter: V*A/g with A debiased against the pitot TAS reference
+    // (see VarioFusion_GetCompTerm()) -- replaces the old raw TAS*a_forward/g + lowpass,
+    // which had no way to detect/remove a drifting accelerometer offset ---
+    VarioFusion_SetAirspeed(g_airspeed, true);
+    term = VarioFusion_GetCompTerm();
     vF = vPrev = 0.0f;                                 // keep GPS state clean for handover
   } else if (g_gpsOk) {
     // --- Fallback (no pitot): classic GPS ground-speed derivative ---
+    VarioFusion_SetAirspeed(0.0f, false);
     float v = g_gndSpeed;
     vF += (v - vF) * (dt / (0.5f + dt));
     float dVdt = (vF - vPrev) / dt;
     vPrev = vF;
     term  = (vF / 9.80665f) * dVdt;
-    termF = term;                                      // seed smoother for handover to pitot
   } else {
+    VarioFusion_SetAirspeed(0.0f, false);
     vF = vPrev = 0.0f;
-    termF = 0.0f;
   }
   if (term >  5.0f) term =  5.0f;                      // safety clamps
   if (term < -5.0f) term = -5.0f;

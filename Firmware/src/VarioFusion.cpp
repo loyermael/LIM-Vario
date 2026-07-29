@@ -22,6 +22,12 @@
 #define Q_BIAS       1e-4f    // Slow drift rate of vertical accelerometer bias
 #define R_ALT        0.25f    // m^2        : Barometric altitude measurement noise (~0.5 m std dev)
 #define R_ACC        0.36f    // (m/s^2)^2  : Vertical acceleration noise (~0.6 m/s^2 std dev)
+// Horizontal Kalman filter (TE compensation, {V,A,bias} -- same sensor/noise character as
+// the vertical filter above, so same starting values; tune independently in flight if needed)
+#define Q_ACC_H      1.0f     // (m/s^2)^2/s : forward-accel agility
+#define Q_BIAS_H     1e-4f    // Slow drift rate of forward-accelerometer bias
+#define R_TAS        0.36f    // (m/s)^2    : MS4525 airspeed noise (~0.6 m/s std dev)
+#define R_ACC_H      0.36f    // (m/s^2)^2  : forward acceleration noise (~0.6 m/s^2 std dev)
 // DISPLAY time constant (output smoothing filter, as on soaring instruments:
 // internal Kalman state tracks rapidly, while output needle display is gently smoothed)
 #define OUT_TAU      0.7f     // seconds : 0.4 = responsive/snappy, 1.0 = smooth/calm
@@ -53,6 +59,16 @@ static bool  s_magHeadingValid = false;
 static float    x[4];
 static float    P[4][4];
 static bool     kalInit = false;
+
+// Horizontal Kalman filter state vector (TE compensation): xh = { V, A, bias } ; see
+// hkalman_* functions below -- structurally the bottom-right 3x3 submatrix of the vertical
+// filter's dynamics above (V takes the role of v, no "position" state needed: the pitot
+// measures V directly, one integration level up from A, same as v is from a above).
+static float    xh[3];
+static float    Ph[3][3];
+static bool     hkalInit = false;
+static float    s_tasMs   = 0.0f;   // last airspeed fed via VarioFusion_SetAirspeed()
+static bool     s_tasValid = false;
 
 static float altitude_std(float p_pa)   // Standard pressure altitude (QNH-independent)
 {
@@ -197,6 +213,68 @@ static void kalman_update_acc(float z)
 }
 
 // ------------------------------------------------------------
+//  3-State Horizontal Kalman Filter (TE compensation)
+//  Measurements : z_v = V    |  z_a = A + bias
+//  Same structure as the 4-state filter above, minus the "position" row/col (the pitot
+//  measures V directly -- no extra integration level needed, unlike altitude vs. vario).
+// ------------------------------------------------------------
+static void hkalman_reset(float v0)
+{
+  xh[0] = v0; xh[1] = 0.0f; xh[2] = 0.0f;
+  for (int i = 0; i < 3; i++)
+    for (int j = 0; j < 3; j++) Ph[i][j] = 0.0f;
+  Ph[0][0] = 100.0f; Ph[1][1] = 10.0f; Ph[2][2] = 1.0f;
+  hkalInit = true;
+}
+
+static void hkalman_predict(float dt)
+{
+  // x = F x   (F = [[1,dt,0],[0,1,0],[0,0,1]])
+  xh[0] += dt * xh[1];
+  float FP[3][3];
+  for (int j = 0; j < 3; j++) {
+    FP[0][j] = Ph[0][j] + dt * Ph[1][j];
+    FP[1][j] = Ph[1][j];
+    FP[2][j] = Ph[2][j];
+  }
+  for (int i = 0; i < 3; i++) {
+    Ph[i][0] = FP[i][0] + dt * FP[i][1];
+    Ph[i][1] = FP[i][1];
+    Ph[i][2] = FP[i][2];
+  }
+  Ph[1][1] += Q_ACC_H  * dt;
+  Ph[2][2] += Q_BIAS_H * dt;
+}
+
+// Airspeed measurement update : H = [1 0 0]
+static void hkalman_update_v(float z)
+{
+  float S = Ph[0][0] + R_TAS;
+  float y = z - xh[0];
+  float K[3];
+  for (int i = 0; i < 3; i++) K[i] = Ph[i][0] / S;
+  for (int i = 0; i < 3; i++) xh[i] += K[i] * y;
+  float HP[3];
+  for (int j = 0; j < 3; j++) HP[j] = Ph[0][j];
+  for (int i = 0; i < 3; i++)
+    for (int j = 0; j < 3; j++) Ph[i][j] -= K[i] * HP[j];
+}
+
+// Forward acceleration measurement update : H = [0 1 1]  (measurement includes bias)
+static void hkalman_update_a(float z)
+{
+  float S = Ph[1][1] + Ph[2][2] + 2.0f*Ph[1][2] + R_ACC_H;
+  float y = z - xh[1] - xh[2];
+  float K[3];
+  for (int i = 0; i < 3; i++) K[i] = (Ph[i][1] + Ph[i][2]) / S;
+  for (int i = 0; i < 3; i++) xh[i] += K[i] * y;
+  float HP[3];
+  for (int j = 0; j < 3; j++) HP[j] = Ph[1][j] + Ph[2][j];
+  for (int i = 0; i < 3; i++)
+    for (int j = 0; j < 3; j++) Ph[i][j] -= K[i] * HP[j];
+}
+
+// ------------------------------------------------------------
 //  API Implementation
 // ------------------------------------------------------------
 static float g_lastAVert = 0.0f;
@@ -209,6 +287,18 @@ bool VarioFusion_Ready(void)
 
 float VarioFusion_GetVertAccel(void) { return g_lastAVert; }
 float VarioFusion_GetFwdAccel(void)  { return g_lastAFwd; }
+
+void VarioFusion_SetAirspeed(float tasMs, bool valid)
+{
+  s_tasMs    = tasMs;
+  s_tasValid = valid;
+}
+
+float VarioFusion_GetCompTerm(void)
+{
+  if (!hkalInit) return 0.0f;
+  return xh[0] * xh[1] / G_MS2;   // V_filtered * A_debiased / g
+}
 
 void VarioFusion_GetRollPitch(float* rollDeg, float* pitchDeg)
 {
@@ -257,6 +347,32 @@ float VarioFusion_Step(float ax, float ay, float az,
   float aVert = vertical_accel(ax, ay, az);
   g_lastAVert = aVert;
   g_lastAFwd  = forward_accel(ax, ay, az);   // for inertial TE compensation
+
+  // --- Horizontal Kalman Filter (TE compensation: separates true forward accel from a
+  // slowly-drifting accelerometer bias, using the pitot airspeed as the independent
+  // reference -- same principle as the vertical filter's bias state, applied along-track) ---
+  if (!hkalInit) {
+    if (s_tasValid) hkalman_reset(s_tasMs);
+  } else {
+    hkalman_predict(dt);
+    hkalman_update_a(g_lastAFwd);
+    if (s_tasValid) {
+      // Anti-glitch guard (same spirit as the altitude one below): a pitot/link glitch
+      // reads as an implausible instantaneous airspeed jump -- ignore transiently, only
+      // re-anchor the filter if the jump is sustained (a real airspeed change that large
+      // over one 50Hz tick doesn't happen).
+      static const float MAX_TAS_JUMP = 15.0f;   // m/s per tick
+      static const int   MAX_REJECT_H = 8;
+      static int s_tasReject = 0;
+      if (fabsf(s_tasMs - xh[0]) > MAX_TAS_JUMP) {
+        if (s_tasReject < MAX_REJECT_H) { s_tasReject++; }
+        else { s_tasReject = 0; hkalman_reset(s_tasMs); }
+      } else {
+        s_tasReject = 0;
+        hkalman_update_v(s_tasMs);
+      }
+    }
+  }
 
   // --- Kalman Filter ---
   bool baroOk = (p_pa > 30000.0f && p_pa < 110000.0f);

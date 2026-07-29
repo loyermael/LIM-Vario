@@ -37,3 +37,23 @@ float VarioFusion_GetVertAccel(void);
 // replaces the noisy numerical derivative of airspeed with a direct IMU measurement.
 // Assumes the board +X axis points toward the glider nose (see IMU_FWD_SIGN in .cpp).
 float VarioFusion_GetFwdAccel(void);
+
+// Current roll/pitch estimate (degrees), derived from the gravity-only AHRS quaternion.
+// Used to tilt-compensate the magnetometer reading (see MagCal_Apply() in main.cpp) --
+// independent of any magnetic correction, so available even before the compass is
+// calibrated or trusted.
+void VarioFusion_GetRollPitch(float* rollDeg, float* pitchDeg);
+
+// Feeds a MAGNETIC (not true) heading measurement, degrees 0..360, into the AHRS as a
+// yaw correction, extending the gravity-only Mahony filter to 9 axes. The caller (see
+// MagCal_Apply() in main.cpp) is responsible for hard/soft-iron correction and tilt
+// compensation; declination is deliberately NOT applied here, so this stays a pure
+// magnetic-north reference -- true-heading conversion happens where the heading is
+// consumed (main.cpp adds g_wmmDecl). Pass valid=false to leave yaw free-running on
+// gyro alone, e.g. before the compass calibration is trusted (see g_magCalValid).
+void VarioFusion_SetMagHeading(float magHeadingDeg, bool valid);
+
+// Latest fused heading (degrees, 0..360, MAGNETIC -- add declination for true heading).
+// Meaningless (pure gyro-integrated, drifting) until VarioFusion_SetMagHeading() has
+// been fed valid data at least once.
+float VarioFusion_GetHeading(void);

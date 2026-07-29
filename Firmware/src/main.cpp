@@ -21,6 +21,7 @@
 #include "ui/images.h"   // img_gps_connected / img_gps_waiting
 #include "lim_link.h"
 #include "VarioFusion.h"
+#include "WorldMagModel.h"
 #include "FlightLog.h"
 #include "ThermalHelper.h"
 #include "ThermalDraw.h"
@@ -76,6 +77,17 @@ static volatile float g_magX       = 0.0f;   // champ magnetique, uT, repere cap
 static volatile float g_magY       = 0.0f;
 static volatile float g_magZ       = 0.0f;
 static volatile bool  g_magOk      = false;  // LIS3MDL detecte cote calculateur
+static float g_wmmDecl   = 0.0f;   // declinaison magnetique locale (deg, +Est), modele WMM
+static bool  g_wmmValid  = false;  // true des qu'un calcul WMM a reussi (necessite un fix GPS)
+// Calibration hard/soft-iron du magnetometre (fit ellipse sur les composantes horizontales
+// tilt-compensees, cf MagCal_Apply()). Auto-referencee a un cercle unite -- aucune intensite
+// de champ absolue necessaire (cf WorldMagModel.h).
+struct MagCalState {
+  float ox = 0.0f, oy = 0.0f;
+  float m00 = 1.0f, m01 = 0.0f, m10 = 0.0f, m11 = 1.0f;
+};
+static MagCalState g_magCal;
+static bool  g_magCalValid = false; // true des qu'une calibration hard/soft-iron a ete acceptee
 static volatile bool  g_circling   = false;  // true = spiral detected (else straight flight)
 static volatile int   g_turnDir    = 0;      // turn direction: +1 right / -1 left / 0
 static float g_varioFiltered = NAN;   // vario apres filtre utilisateur (Fast/Med/Slow), EMA
@@ -505,6 +517,15 @@ void Profile_GetName(int idx, char* out, size_t outLen) {
 
 static Preferences prefs;
 
+// Calibration magnetometre : sauvegarde independante de Config_Save() (declenchee par
+// MagCal_Apply() a chaque virage accepte, pas seulement a la sortie d'un menu) mais meme
+// idiome de stockage (namespace "limvario", putBytes/getBytes avec fallback sur defaut).
+static void MagCal_Save() {
+  prefs.begin("limvario", false);
+  prefs.putBytes("magcal", &g_magCal, sizeof(g_magCal));
+  prefs.end();
+}
+
 void Config_Save() {
   prefs.begin("limvario", false);
   prefs.putInt("bright", g_brightness);
@@ -577,6 +598,11 @@ static void Config_Load() {
   }
   g_centerConfigClimb = prefs.getUChar("c_climb", CENTER_THERMAL_HELPER);
   g_centerConfigCruise = prefs.getUChar("c_cruise", CENTER_WIND_DIR);
+  MagCalState loadedCal;
+  if (prefs.getBytes("magcal", &loadedCal, sizeof(loadedCal)) == sizeof(loadedCal)) {
+    g_magCal = loadedCal;
+    g_magCalValid = true;   // calibration precedente reutilisee tant qu'un virage ne la rafraichit pas
+  }
   for (int i = 0; i < 6; i++) {
     if (g_ibConfigClimb[i] >= IB_METRIC_MAX) g_ibConfigClimb[i] = IB_EMPTY;
     if (g_ibConfigCruise[i] >= IB_METRIC_MAX) g_ibConfigCruise[i] = IB_EMPTY;
@@ -2458,6 +2484,192 @@ static void wind_blend(float* spd, float* dir, float newSpd, float newDir, float
   if (*dir >= 360.0f) *dir -= 360.0f;
 }
 
+// Refreshes the local magnetic declination (g_wmmDecl/g_wmmValid) from the WMM2025 model.
+// Low cadence on purpose: the spherical-harmonic lookup is too costly for the 1 Hz wind/
+// circling tick, and declination barely changes over a few km of glider flight.
+static void WMM_Apply()
+{
+  static uint32_t lastMs = 0;
+  uint32_t now = millis();
+  if (lastMs != 0 && now - lastMs < 30000) return;   // rafraichi toutes les 30 s
+  lastMs = now;
+
+  float decl;
+  if (g_gpsOk && WMM_GetDeclination(g_gpsLat, g_gpsLon, &decl)) {
+    g_wmmDecl  = decl;
+    g_wmmValid = true;
+  }
+}
+
+// Placeholder mounting constant: LIS3MDL (carte Calc) axes -> repere de l'AHRS (carte Ecran,
+// QMI8658). Les deux capteurs sont sur des PCB physiquement distincts -> leur relation d'axes
+// n'est PAS connue par construction (contrairement a IMU_FWD_SIGN, qui ne concerne qu'un seul
+// capteur deja monte sur la carte Ecran). Identite ci-dessous en attendant la verification au
+// banc (poser l'ensemble Calc+Ecran dans 2-3 orientations connues, comparer g_magX/Y/Z a
+// l'attitude AHRS + au champ terrestre local) -- une fois verifiee, seules ces 3 lignes
+// changent, rien d'autre dans ce fichier n'a besoin d'etre touche.
+static inline void MagRemap_ToBody(float mx, float my, float mz, float* bx, float* by, float* bz)
+{
+  *bx = mx;
+  *by = my;
+  *bz = mz;
+}
+
+static void MagCal_Correct(float mxh, float myh, float* cx, float* cy)
+{
+  float x = mxh - g_magCal.ox;
+  float y = myh - g_magCal.oy;
+  *cx = g_magCal.m00 * x + g_magCal.m01 * y;
+  *cy = g_magCal.m10 * x + g_magCal.m11 * y;
+}
+
+// Least-squares fit of A x^2 + Bxy + Cy^2 + Dx + Ey = 1 to `n` (x,y) samples (5x5 normal
+// equations solved by Gaussian elimination), reduced to a hard-iron offset + soft-iron
+// correction matrix mapping the fitted ellipse onto a unit circle. Generic magnetometer
+// calibration technique, derived and numerically validated independently (see project
+// notes) -- not copied from any existing codebase. Returns false on a degenerate fit.
+static bool MagCal_FitEllipse(const float* xs, const float* ys, int n, MagCalState* out)
+{
+  if (n < 24) return false;
+  double M[5][6];
+  memset(M, 0, sizeof(M));
+  for (int i = 0; i < n; i++) {
+    double x = xs[i], y = ys[i];
+    double r[5] = { x*x, x*y, y*y, x, y };
+    for (int a = 0; a < 5; a++) {
+      for (int b = 0; b < 5; b++) M[a][b] += r[a]*r[b];
+      M[a][5] += r[a];
+    }
+  }
+  for (int col = 0; col < 5; col++) {
+    int piv = col;
+    for (int r = col+1; r < 5; r++) if (fabs(M[r][col]) > fabs(M[piv][col])) piv = r;
+    if (fabs(M[piv][col]) < 1e-9) return false;
+    if (piv != col) for (int c = 0; c < 6; c++) { double t = M[col][c]; M[col][c] = M[piv][c]; M[piv][c] = t; }
+    for (int r = 0; r < 5; r++) {
+      if (r == col) continue;
+      double f = M[r][col] / M[col][col];
+      for (int c = col; c < 6; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  double A = M[0][5]/M[0][0], B = M[1][5]/M[1][1], C = M[2][5]/M[2][2];
+  double D = M[3][5]/M[3][3], E = M[4][5]/M[4][4];
+
+  double det = 4.0*A*C - B*B;
+  if (fabs(det) < 1e-9) return false;
+  double ox = (-2.0*C*D + B*E) / det;
+  double oy = (-2.0*A*E + B*D) / det;
+
+  // NB: k can come out negative depending on the arbitrary overall scale the least-squares
+  // fit settles on (it forces the constant term to exactly 1, whichever sign that implies
+  // for the quadratic part) -- only its magnitude matters below, not its sign.
+  double k = 1.0 - (A*ox*ox + B*ox*oy + C*oy*oy + D*ox + E*oy);
+  if (fabs(k) < 1e-9) return false;
+
+  double qa = A/k, qb = (B*0.5)/k, qc = C/k;
+  double half_tr = (qa+qc)*0.5, half_diff = (qa-qc)*0.5;
+  double disc = sqrt(half_diff*half_diff + qb*qb);
+  double l1 = half_tr+disc, l2 = half_tr-disc;
+  if (l1 <= 0.0 || l2 <= 0.0) return false;   // pas une ellipse valide (fit degenere)
+
+  double evx, evy;
+  if (fabs(qb) > 1e-9) { evx = l1 - qc; evy = qb; }
+  else if (qa >= qc)   { evx = 1.0; evy = 0.0; }
+  else                 { evx = 0.0; evy = 1.0; }
+  double vn = sqrt(evx*evx + evy*evy); evx /= vn; evy /= vn;
+  double s1 = sqrt(l1), s2 = sqrt(l2);
+
+  // M = V * diag(s1,s2) * V^T, V = [[evx,-evy],[evy,evx]] (colonnes = vecteurs propres)
+  out->m00 = (float)(evx*evx*s1 + evy*evy*s2);
+  out->m01 = (float)(evx*evy*s1 - evx*evy*s2);
+  out->m10 = out->m01;
+  out->m11 = (float)(evy*evy*s1 + evx*evx*s2);
+  out->ox  = (float)ox;
+  out->oy  = (float)oy;
+  return true;
+}
+
+// Tourne a chaque iteration de boucle (pas limite a 1 Hz comme Wind_Apply -- le fit
+// d'ellipse veut le plus d'echantillons possible par tour) : tilt-compense la lecture
+// magnetometre courante, alimente l'AHRS en cap corrige (VarioFusion_SetMagHeading), et --
+// en virage seulement -- accumule les echantillons pour la calibration hard/soft-iron.
+static void MagCal_Apply()
+{
+  if (!g_magOk) { VarioFusion_SetMagHeading(0.0f, false); return; }
+
+  float bx, by, bz;
+  MagRemap_ToBody(g_magX, g_magY, g_magZ, &bx, &by, &bz);
+
+  float rollDeg, pitchDeg;
+  VarioFusion_GetRollPitch(&rollDeg, &pitchDeg);
+  float rollRad  = rollDeg  * (PI / 180.0f);
+  float pitchRad = pitchDeg * (PI / 180.0f);
+  float cr = cosf(rollRad), sr = sinf(rollRad);
+  float cp = cosf(pitchRad), sp = sinf(pitchRad);
+  // Formule standard de boussole tilt-compensee : fait tourner le champ (repere capteur)
+  // dans un repere "a plat", mxh/myh restant exprimes par rapport au cap COURANT (avant/droite).
+  float mxh = bx*cp + by*sr*sp + bz*cr*sp;
+  float myh = by*cr - bz*sr;
+
+  if (g_magCalValid) {
+    float cx, cy;
+    MagCal_Correct(mxh, myh, &cx, &cy);
+    float mag = sqrtf(cx*cx + cy*cy);
+    bool disturbed = fabsf(mag - 1.0f) > 0.20f;   // garde-fou anti-perturbation (auto-reference)
+    if (!disturbed) {
+      // cap = angle entre le nez et le nord magnetique (sens horaire = Est positif). Signe/
+      // convention exacts (mxh=avant, myh=droite) a verifier au banc en meme temps que la
+      // Phase 0 -- une seule ligne a inverser ici (mettre +cy) si le cap part a l'envers.
+      float headingDeg = atan2f(-cy, cx) * (180.0f / PI);
+      if (headingDeg < 0.0f) headingDeg += 360.0f;
+      VarioFusion_SetMagHeading(headingDeg, true);
+    } else {
+      VarioFusion_SetMagHeading(0.0f, false);
+    }
+  } else {
+    VarioFusion_SetMagHeading(0.0f, false);
+  }
+
+  // ---- Accumulation pour la calibration hard/soft-iron (uniquement en virage) ----
+  static float sx[400], sy[400];
+  static int   nSamp     = 0;
+  static float prevTrack = NAN;
+  static float rotAccum  = 0.0f;
+
+  if (!g_circling || !g_gpsOk || isnan(g_gpsTrack)) {
+    nSamp = 0; prevTrack = NAN; rotAccum = 0.0f;
+    return;
+  }
+  if (isnan(prevTrack)) { prevTrack = g_gpsTrack; return; }
+  float d = g_gpsTrack - prevTrack;
+  while (d > 180.0f)  d -= 360.0f;
+  while (d < -180.0f) d += 360.0f;
+  prevTrack = g_gpsTrack;
+  rotAccum += fabsf(d);
+
+  if (nSamp < 400) { sx[nSamp] = mxh; sy[nSamp] = myh; nSamp++; }
+
+  if (rotAccum >= 360.0f) {
+    MagCalState fit;
+    if (MagCal_FitEllipse(sx, sy, nSamp, &fit)) {
+      const float BLEND = 0.3f;   // lissage : un virage bruite ne doit pas ecraser la calib
+      if (!g_magCalValid) {
+        g_magCal = fit;          // seed direct au premier fit accepte
+      } else {
+        g_magCal.ox  += (fit.ox  - g_magCal.ox)  * BLEND;
+        g_magCal.oy  += (fit.oy  - g_magCal.oy)  * BLEND;
+        g_magCal.m00 += (fit.m00 - g_magCal.m00) * BLEND;
+        g_magCal.m01 += (fit.m01 - g_magCal.m01) * BLEND;
+        g_magCal.m10 += (fit.m10 - g_magCal.m10) * BLEND;
+        g_magCal.m11 += (fit.m11 - g_magCal.m11) * BLEND;
+      }
+      g_magCalValid = true;
+      MagCal_Save();
+    }
+    nSamp = 0; rotAccum = 0.0f;
+  }
+}
+
 static void Wind_Apply()
 {
   static uint32_t lastMs    = 0;
@@ -2498,11 +2710,46 @@ static void Wind_Apply()
       g_windSpeedMs = g_windAvgSpeed = newSpeed;   // seed both estimates on the first turn
       g_windDirDeg  = g_windAvgDir   = newDir;
     } else {
-      wind_blend(&g_windSpeedMs,  &g_windDirDeg, newSpeed, newDir, 0.5f);   // LIVE  (~last turns)
-      wind_blend(&g_windAvgSpeed, &g_windAvgDir, newSpeed, newDir, 0.15f);  // AVERAGED (~30 s)
+      // Le LIVE par tour reste le mecanisme de repli quand le magnetometre n'est pas
+      // calibre -- des que WindInstant_Apply() est operationnel, c'est elle qui pilote le
+      // LIVE en continu (cf plus bas). Le MOYENNE (30s) continue de suivre le vent par tour
+      // dans tous les cas, c'est la seule source qu'on ait pour ce lissage long.
+      if (!g_magCalValid) wind_blend(&g_windSpeedMs, &g_windDirDeg, newSpeed, newDir, 0.5f);
+      wind_blend(&g_windAvgSpeed, &g_windAvgDir, newSpeed, newDir, 0.15f);
     }
 
     sumEast = sumNorth = sumDt = rotAccum = 0.0f;   // reset for the next turn
+  }
+}
+
+// Vent instantane par triangle des vitesses (methode LARUS, reimplementee) : vent =
+// vecteur_sol (GPS) - vecteur_air (vitesse air + cap magnetique fusionne). Contrairement a
+// Wind_Apply() ci-dessus, ne depend PAS de g_circling -- fonctionne aussi en croisiere/
+// transition, ce qui est tout l'interet face a l'estimation par tour de spirale.
+static void WindInstant_Apply()
+{
+  if (!g_magCalValid || !g_gpsOk || isnan(g_gpsTrack) || isnan(g_gndSpeed) || g_airspeed <= 0.5f) return;
+
+  float trueHeadingDeg = VarioFusion_GetHeading() + (g_wmmValid ? g_wmmDecl : 0.0f);
+  float hdgRad = trueHeadingDeg * (PI / 180.0f);
+  float trkRad = g_gpsTrack     * (PI / 180.0f);
+
+  float airEast  = g_airspeed * sinf(hdgRad);
+  float airNorth = g_airspeed * cosf(hdgRad);
+  float gndEast  = g_gndSpeed * sinf(trkRad);
+  float gndNorth = g_gndSpeed * cosf(trkRad);
+
+  float windEast  = gndEast  - airEast;    // vecteur "vent VERS" (ou il souffle)
+  float windNorth = gndNorth - airNorth;
+  float newSpeed = sqrtf(windEast*windEast + windNorth*windNorth);
+  float newDir   = atan2f(-windEast, -windNorth) * (180.0f / PI);   // "vent DE" = oppose
+  if (newDir < 0.0f) newDir += 360.0f;
+
+  if (isnan(g_windSpeedMs)) {
+    g_windSpeedMs = newSpeed;
+    g_windDirDeg  = newDir;
+  } else {
+    wind_blend(&g_windSpeedMs, &g_windDirDeg, newSpeed, newDir, 0.3f);   // reactif, mise a jour continue
   }
 }
 
@@ -3394,8 +3641,11 @@ void loop()
     }
   }
 
+  WMM_Apply();        // declinaison magnetique locale (cadence basse) -> g_wmmDecl/g_wmmValid
   Circling_Apply(); // detection spirale / vol droit -> g_circling + g_turnDir
+  MagCal_Apply();     // cap magnetique fusionne (AHRS) + calibration hard/soft-iron en virage
   Wind_Apply();       // estimation vent (derive GPS en spirale) -> g_windSpeedMs/g_windDirDeg
+  WindInstant_Apply(); // vent instantane (triangle des vitesses) -> pilote le LIVE si mag calibre
   EnergyArrow_Apply(); // fleche energie (difference vectorielle vent live - moyen) -> g_energyDir/Mag
   // Auto-switch the displayed info-boxes between the Climb and Cruise profile, except
   // while editing one of the two profiles in the menu (g_infoBoxConfig then deliberately

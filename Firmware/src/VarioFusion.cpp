@@ -13,6 +13,10 @@
 #define KP_ALIGN     8.0f     // High proportional gain during initial alignment
 #define KP_RUN       0.35f    // Low proportional gain during flight (accelerometer vector deflects in turns)
 #define ALIGN_MS     3000     // Initial alignment duration at startup (milliseconds)
+// Magnetic yaw correction (9th axis, added to the gravity-only filter above). Deliberately
+// lower than KP_RUN: a bad/disturbed mag sample must not be able to slew yaw as fast as a
+// bad accel sample can slew roll/pitch -- yaw has no accelerometer-based fallback to lean on.
+#define KP_MAG       0.15f
 // Kalman Filter (Process and measurement noise covariances; tune in flight if needed)
 #define Q_ACC        1.0f     // (m/s^2)^2/s : Vario agility / responsiveness (higher = faster response)
 #define Q_BIAS       1e-4f    // Slow drift rate of vertical accelerometer bias
@@ -24,6 +28,7 @@
 
 #define G_MS2        9.80665f
 #define DEG2RAD      0.017453293f
+#define RAD2DEG      57.29577951f
 
 // IMU forward axis = glider nose direction, in board body frame.
 // The board +X axis is ASSUMED to point toward the nose. If the real mounting differs,
@@ -39,6 +44,11 @@ static bool     ahrsInit  = false;
 static uint32_t startMs   = 0;
 static uint32_t lastUs    = 0;
 
+// Latest magnetic heading measurement (see VarioFusion_SetMagHeading()). Read by
+// mahony_update() every step; only acted on while s_magHeadingValid is true.
+static float s_magHeadingDeg   = 0.0f;
+static bool  s_magHeadingValid = false;
+
 // Kalman Filter state vector: x = { h, v, a, bias } ; covariance matrix P
 static float    x[4];
 static float    P[4][4];
@@ -50,25 +60,45 @@ static float altitude_std(float p_pa)   // Standard pressure altitude (QNH-indep
 }
 
 // ------------------------------------------------------------
-//  Mahony AHRS (Gravity vector correction only, no magnetometer)
+//  Mahony AHRS (Gravity vector correction + optional magnetic yaw correction)
 // ------------------------------------------------------------
 static void mahony_update(float gx, float gy, float gz,   // rad/s
                           float ax, float ay, float az,   // g (arbitrary norm)
                           float kp, float dt)
 {
+  // Estimated "up" vector in body frame (3rd row of transposed R matrix), needed by the
+  // gravity correction below AND by the magnetic yaw correction further down.
+  float vx = 2.0f*(q1*q3 - q0*q2);
+  float vy = 2.0f*(q0*q1 + q2*q3);
+  float vz = q0*q0 - q1*q1 - q2*q2 + q3*q3;
+
   float n = sqrtf(ax*ax + ay*ay + az*az);
   if (n > 0.5f && n < 1.5f) {            // Apply correction only if |a| ~ 1 g
     ax /= n; ay /= n; az /= n;
-    // Estimated gravity vector in body frame (3rd row of transposed R matrix)
-    float vx = 2.0f*(q1*q3 - q0*q2);
-    float vy = 2.0f*(q0*q1 + q2*q3);
-    float vz = q0*q0 - q1*q1 - q2*q2 + q3*q3;
     // Error = measured acceleration cross estimated gravity
     float ex = ay*vz - az*vy;
     float ey = az*vx - ax*vz;
     float ez = ax*vy - ay*vx;
     gx += kp * ex;  gy += kp * ey;  gz += kp * ez;
   }
+
+  // Magnetic yaw correction (9th axis). Rather than a full 3-axis vector fusion (which
+  // would need the field's inclination -- not available, see WorldMagModel.h), this nudges
+  // ONLY yaw: the heading error (measured magnetic heading vs. the quaternion's own yaw,
+  // both scalars) is applied as a small-angle rotation around the current "up" axis
+  // (vx,vy,vz) -- i.e. a pure yaw-rate correction that cannot leak into roll/pitch, which
+  // stay entirely owned by the gravity term above.
+  if (s_magHeadingValid) {
+    float yawEst = atan2f(2.0f*(q0*q3 + q1*q2), q0*q0 + q1*q1 - q2*q2 - q3*q3) * RAD2DEG;
+    float err = s_magHeadingDeg - yawEst;
+    while (err > 180.0f)  err -= 360.0f;
+    while (err < -180.0f) err += 360.0f;
+    float errRad = err * DEG2RAD;
+    gx += KP_MAG * errRad * vx;
+    gy += KP_MAG * errRad * vy;
+    gz += KP_MAG * errRad * vz;
+  }
+
   // Quaternion integration: dq = 0.5 * q * omega
   float halfdt = 0.5f * dt;
   float dq0 = (-q1*gx - q2*gy - q3*gz) * halfdt;
@@ -179,6 +209,28 @@ bool VarioFusion_Ready(void)
 
 float VarioFusion_GetVertAccel(void) { return g_lastAVert; }
 float VarioFusion_GetFwdAccel(void)  { return g_lastAFwd; }
+
+void VarioFusion_GetRollPitch(float* rollDeg, float* pitchDeg)
+{
+  float vx = 2.0f*(q1*q3 - q0*q2);
+  float vy = 2.0f*(q0*q1 + q2*q3);
+  float vz = q0*q0 - q1*q1 - q2*q2 + q3*q3;
+  *rollDeg  = atan2f(vy, vz) * RAD2DEG;
+  *pitchDeg = atan2f(-vx, sqrtf(vy*vy + vz*vz)) * RAD2DEG;
+}
+
+void VarioFusion_SetMagHeading(float magHeadingDeg, bool valid)
+{
+  s_magHeadingDeg   = magHeadingDeg;
+  s_magHeadingValid = valid;
+}
+
+float VarioFusion_GetHeading(void)
+{
+  float yaw = atan2f(2.0f*(q0*q3 + q1*q2), q0*q0 + q1*q1 - q2*q2 - q3*q3) * RAD2DEG;
+  if (yaw < 0.0f) yaw += 360.0f;
+  return yaw;
+}
 
 float VarioFusion_Step(float ax, float ay, float az,
                        float gx, float gy, float gz,

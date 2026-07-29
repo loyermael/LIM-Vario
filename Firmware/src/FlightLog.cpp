@@ -163,7 +163,7 @@ static void file_open_new(void)
     FlightLog_AddError("SD", "failed to open new log file (card full, removed or corrupt?)");
     return;
   }
-  g_file.println("ms,p_pa,alt_std_m,alt_gps_m,vario_baro,vario_comp,vario_fused,vario_netto,"
+  g_file.println("ms,utc_hhmmss,p_pa,alt_std_m,alt_gps_m,vario_baro,vario_comp,vario_fused,vario_netto,"
                   "vario_avg,accel_vert,airspeed_ms,gndspeed_ms,gps_fix,gps_track_deg,"
                   "gps_lat,gps_lon,circling,turn_dir,wind_speed_ms,wind_dir_deg,"
                   "windavg_speed_ms,windavg_dir_deg,"
@@ -315,7 +315,7 @@ void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
                     float windAvgSpeed_ms, float windAvgDir_deg,
                     float energyMag, float energyDir_deg,
                     float climbGain_m, float stfSpeed_kmh,
-                    int volume)
+                    int volume, long utcHhmmss)
 {
   if (!g_sdOk || g_srvOn || isnan(alt_m)) return;
   uint32_t now = millis();
@@ -327,6 +327,9 @@ void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
   char line[LINE_MAX];
   size_t n = 0;
   n += snprintf(line + n, sizeof(line) - n, "%lu,", (unsigned long)now);
+  // utc_hhmmss : meme convention que le champ B-record d'un fichier IGC (HHMMSS, sans
+  // separateurs) -- comparaison directe possible sans reformatage. -1 = pas encore d'heure GPS.
+  n += snprintf(line + n, sizeof(line) - n, "%ld,", utcHhmmss);
   n += csvF(line + n, sizeof(line) - n, p_pa, 1);
   n += csvF(line + n, sizeof(line) - n, alt_m, 1);
   n += csvF(line + n, sizeof(line) - n, gpsAlt_m, 1);

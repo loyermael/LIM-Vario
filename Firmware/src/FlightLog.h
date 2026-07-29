@@ -23,7 +23,7 @@ void FlightLog_Tick(float p_pa, float alt_m, float gpsAlt_m,
                     float windAvgSpeed_ms, float windAvgDir_deg,
                     float energyMag, float energyDir_deg,
                     float climbGain_m, float stfSpeed_kmh,
-                    int volume);
+                    int volume, long utcHhmmss);   // utcHhmmss: -1 si pas encore d'heure GPS
 void FlightLog_ServerToggle(void);
 void FlightLog_ServerLoop(void);
 bool FlightLog_ServerActive(void);

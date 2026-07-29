@@ -36,6 +36,12 @@ static int       g_numSat = 0;      // satellites used, from GGA field 7 (0 if n
 static int       g_fixQuality = 0;  // GGA field 6: 0=none, 1=GPS, 2=DGPS, 4=RTK fixed, 5=RTK float
 static bool      g_fix    = false;
 static uint32_t  g_lastMs = 0;
+// Heure/date UTC (RMC champs 1 et 9) -- transmises a l'ecran pour horodater le log de vol
+// (comparaison avec un fichier IGC externe). g_utcSet reste false tant qu'aucune trame RMC
+// valide n'a ete recue (sentinelle, evite de renvoyer 00:00:00 comme si c'etait une vraie heure).
+static uint8_t   g_utcHour = 0, g_utcMin = 0, g_utcSec = 0;
+static uint8_t   g_utcDay  = 0, g_utcMonth = 0, g_utcYear2 = 0;
+static bool      g_utcSet  = false;
 static float     g_cVario   = 0.0f;  // Condor total energy vario (evario, m/s)
 static float     g_cAlt     = 0.0f;  // Condor altitude (m)
 static uint32_t  g_condorMs = 0;     // Timestamp of last Condor packet received (key=value)
@@ -188,6 +194,15 @@ static float nmeaToDecimal(const char* raw, char hemi)
   return (hemi == 'S' || hemi == 'W') ? -dec : dec;
 }
 
+// Parses NMEA fixed-width time ("hhmmss.ss", RMC field 1) / date ("ddmmyy", RMC field 9)
+// fields -- unlike lat/lon there's no minutes-to-decimal conversion, just 2-digit groups.
+static bool nmeaParseDigitPair(const char* s, int offset, uint8_t* out)
+{
+  if (!s || (int)strlen(s) < offset + 2) return false;
+  *out = (uint8_t)((s[offset] - '0') * 10 + (s[offset + 1] - '0'));
+  return true;
+}
+
 // Parses an NMEA string (starting with '$'). In-place modification of input buffer.
 static void parseNmea(char* s)
 {
@@ -207,6 +222,17 @@ static void parseNmea(char* s)
       g_lat   = nmeaToDecimal(f[3], f[4][0]);   // fields 3/4 = lat + N/S
       g_lon   = nmeaToDecimal(f[5], f[6][0]);   // fields 5/6 = lon + E/W
       g_lastMs = millis();
+      // field 1 = hhmmss.ss (UTC time), field 9 = ddmmyy (UTC date) -- only trust them
+      // together with the rest of this fix, same 'A' guard as position/speed above.
+      if (n > 9) {
+        bool ok = nmeaParseDigitPair(f[1], 0, &g_utcHour)
+               && nmeaParseDigitPair(f[1], 2, &g_utcMin)
+               && nmeaParseDigitPair(f[1], 4, &g_utcSec)
+               && nmeaParseDigitPair(f[9], 0, &g_utcDay)
+               && nmeaParseDigitPair(f[9], 2, &g_utcMonth)
+               && nmeaParseDigitPair(f[9], 4, &g_utcYear2);
+        if (ok) g_utcSet = true;
+      }
     }
     // 'V' (invalid/no fix): do NOTHING. The timeout inside GpsLink_HasFix
     // handles fix loss -> prevents UI indicator flickering on isolated 'V' frames.
@@ -324,6 +350,18 @@ float GpsLink_Lon(void)         { return GpsLink_HasFix() ? g_lon : NAN; }
 // explains WHY there's no fix yet), unlike position/speed which must not be trusted without one.
 int   GpsLink_NumSat(void)      { return g_numSat; }
 int   GpsLink_FixQuality(void)  { return g_fixQuality; }
+
+// UTC time/date from the last valid RMC sentence (see nmeaParseDigitPair() above). Returns
+// false (all outputs left untouched) until the first valid fix has carried a parseable
+// time/date -- callers must treat that as "no time yet", not as 00:00:00 on 00/00/00.
+bool GpsLink_UtcTime(uint8_t* hour, uint8_t* min, uint8_t* sec,
+                     uint8_t* day, uint8_t* month, uint8_t* year2)
+{
+  if (!g_utcSet) return false;
+  *hour = g_utcHour; *min = g_utcMin; *sec = g_utcSec;
+  *day  = g_utcDay;  *month = g_utcMonth; *year2 = g_utcYear2;
+  return true;
+}
 
 // --- CONDOR Sim Mode (flight sim UDP key=value stream) ---
 bool  GpsLink_CondorActive(void){ return (millis() - g_condorMs) < 5000; }  // 5 s hold (absorbs WiFi jitter)

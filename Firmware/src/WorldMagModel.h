@@ -8,7 +8,12 @@
  *  measured field's own magnitude instead of an absolute WMM value).
  * ============================================================ */
 #pragma once
+#include <stdint.h>
 
-// Looks up magnetic declination (degrees, positive = East) at the given
-// position. Returns false (leaves *declDeg untouched) if lat/lon are NaN.
-bool WMM_GetDeclination(float latDeg, float lonDeg, float* declDeg);
+// Looks up magnetic declination (degrees, positive = East) at the given position, using the
+// given UTC date (day/month, year2 = 2-digit year e.g. 26 for 2026) if day != 0, otherwise
+// falling back to the firmware's build date (see WorldMagModel.cpp) -- the real GPS date is
+// preferred when available (main.cpp only has it once a fix has carried a valid RMC date).
+// Returns false (leaves *declDeg untouched) if lat/lon are NaN.
+bool WMM_GetDeclination(float latDeg, float lonDeg, float* declDeg,
+                        uint8_t day = 0, uint8_t month = 0, uint8_t year2 = 0);

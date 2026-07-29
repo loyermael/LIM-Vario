@@ -501,6 +501,12 @@ void loop() {
   pkt.mag_x      = mx;                              // Raw field, uT. 0/0/0 if LIS3MDL absent
   pkt.mag_y      = my;                              // (LIM_FLAG_MAG_OK distinguishes that from
   pkt.mag_z      = mz;                              // a genuine all-zero reading).
+  // UTC time/date (RMC), for flight-log timestamping -- utc_hour=0xFF sentinel if no valid
+  // fix has carried a parseable time/date yet (do not trust utc_min/sec/day/month/year2 then).
+  if (!GpsLink_UtcTime(&pkt.utc_hour, &pkt.utc_min, &pkt.utc_sec,
+                       &pkt.utc_day, &pkt.utc_month, &pkt.utc_year2)) {
+    pkt.utc_hour = 0xFF;
+  }
 #if SIM_VARIO
   gpsOk          = true;           // SIM provides heading + speed -> activates circling mode on display
   pkt.airspeed   = 25.0f;          // Constant airspeed (dV/dt ~ 0, avoids false TE compensation spikes)

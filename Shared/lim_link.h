@@ -15,7 +15,8 @@
 
 #define LIM_SYNC0    0xA5
 #define LIM_SYNC1    0x5A
-#define LIM_VERSION  6           // v6 : added mag_x/y/z (LIS3MDL, raw uT -> display-side AHRS fusion)
+#define LIM_VERSION  7           // v7 : added utc_hour/min/sec/day/month/year2 (RMC time/date,
+                                 // flight-log timestamping for IGC comparison)
 #define LIM_BAUD     115200      // UART link baud rate (reliable across both ESP32s)
 
 // Flags field bits (Calculator -> Display frame)
@@ -46,6 +47,12 @@ typedef struct {
   float    mag_x;       // magnetic field, uT, sensor frame, RAW/uncalibrated (0 if LIS3MDL absent)
   float    mag_y;       // no tilt/hard/soft-iron compensation applied here -> the display (which
   float    mag_z;       // owns the IMU and the AHRS fusion) is where that belongs, not the calculator
+  uint8_t  utc_hour;    // UTC time/date from the last valid GPS RMC sentence, for flight-log
+  uint8_t  utc_min;     // timestamping (IGC file comparison). utc_hour=0xFF means "no time yet"
+  uint8_t  utc_sec;     // (never trust utc_min/sec/day/month/year2 unless utc_hour != 0xFF).
+  uint8_t  utc_day;
+  uint8_t  utc_month;
+  uint8_t  utc_year2;   // 2-digit year (e.g. 26 = 2026)
   int32_t  enc1_count;  // cumulative encoder 1 step count
   int32_t  enc2_count;  // cumulative encoder 2 step count
   uint8_t  enc1_btn;    // encoder 1 button state (1 = pressed)

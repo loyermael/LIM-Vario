@@ -20,13 +20,14 @@ static void BuildDate_Get(uint8_t* year2, uint8_t* month, uint8_t* day)
   *year2 = (uint8_t)(atoi(__DATE__ + 7) % 100);
 }
 
-bool WMM_GetDeclination(float latDeg, float lonDeg, float* declDeg)
+bool WMM_GetDeclination(float latDeg, float lonDeg, float* declDeg,
+                        uint8_t day, uint8_t month, uint8_t year2)
 {
   if (isnan(latDeg) || isnan(lonDeg)) return false;
   if (!s_init) { s_wmm.begin(); s_init = true; }
 
-  uint8_t y, m, d;
-  BuildDate_Get(&y, &m, &d);
+  uint8_t y = year2, m = month, d = day;
+  if (d == 0) BuildDate_Get(&y, &m, &d);   // pas de date GPS reelle fournie -> date de build
   *declDeg = s_wmm.magneticDeclination(latDeg, lonDeg, y, m, d);
   return true;
 }

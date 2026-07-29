@@ -70,6 +70,12 @@ static volatile float g_gpsLat     = NAN;    // latitude GPS (deg decimaux, +N/-
 static volatile float g_gpsLon     = NAN;    // longitude GPS (deg decimaux, +E/-W ; NaN si pas de fix)
 static volatile bool  g_gpsOk      = false;  // flag fix GPS valide (recu du calculateur)
 static volatile float g_gpsTrack   = NAN;    // cap sol GPS (deg 0..360, NaN si pas de fix)
+// Heure/date UTC GPS (RMC), pour horodater le log de vol (comparaison a un fichier IGC
+// externe) et pour la declinaison WMM (WMM_Apply). g_utcSet=false tant qu'aucune trame RMC
+// valide n'a ete recue -- ne pas interpreter les autres champs comme minuit le 00/00/00.
+static volatile bool    g_utcSet    = false;
+static volatile uint8_t g_utcHour   = 0, g_utcMin = 0, g_utcSec = 0;
+static volatile uint8_t g_utcDay    = 0, g_utcMonth = 0, g_utcYear2 = 0;
 // LIS3MDL magnetometer (calculateur, bus I2C partage). Champ brut non calibre, aucune
 // compensation d'assiette ici -> pas encore de cap magnetique exploitable, juste la
 // plomberie liaison -> reception. Fusion avec l'IMU (deja sur cette carte) a faire plus tard.
@@ -88,6 +94,19 @@ struct MagCalState {
 };
 static MagCalState g_magCal;
 static bool  g_magCalValid = false; // true des qu'une calibration hard/soft-iron a ete acceptee
+
+// Alignement d'axes LIS3MDL (carte Calc) -> repere IMU (carte Ecran), determine par
+// l'assistant de calibration au sol (MagCalWizard_*). srcX/Y/Z = index (0=X,1=Y,2=Z) de la
+// lecture brute a utiliser pour cet axe corps, signX/Y/Z = signe a appliquer. Identite par
+// defaut (avant toute calibration) -- meme role que IMU_FWD_SIGN (VarioFusion.cpp) mais
+// pour 3 axes et determine au sol au lieu d'etre fixe en dur, puisque magneto et IMU sont
+// sur deux cartes physiquement distinctes (relation d'axes pas connue par construction).
+struct MagRemapState {
+  int8_t srcX = 0, srcY = 1, srcZ = 2;
+  int8_t signX = 1, signY = 1, signZ = 1;
+};
+static MagRemapState g_magRemap;
+static bool g_magRemapValid = false;
 static volatile bool  g_circling   = false;  // true = spiral detected (else straight flight)
 static volatile int   g_turnDir    = 0;      // turn direction: +1 right / -1 left / 0
 static float g_varioFiltered = NAN;   // vario apres filtre utilisateur (Fast/Med/Slow), EMA
@@ -220,6 +239,19 @@ enum InfoBoxEditState {
   IBEDIT_CHOOSE_METRIC = 3
 };
 static InfoBoxEditState g_ibEditState = IBEDIT_NONE;
+
+// Assistant de calibration compas au sol (resout aussi l'alignement d'axes magneto/IMU).
+// Voir MagCalWizard_Start()/Tick()/OnPress(), pres de MagCal_Apply().
+enum MagCalWizState {
+  MCW_NONE = 0,
+  MCW_HOLD_LEVEL,
+  MCW_HOLD_TILT1,
+  MCW_HOLD_TILT2,
+  MCW_ROTATE,
+  MCW_DONE
+};
+static MagCalWizState g_magCalWiz = MCW_NONE;
+
 static int s_ibZoneSel = 0;
 static int s_ibChooseSel = 0;
 static lv_obj_t* s_ibFrames[7] = {0};   // [6] = ib_frame_6 = "Back" (ajoute 2 juillet 2026)
@@ -526,6 +558,13 @@ static void MagCal_Save() {
   prefs.end();
 }
 
+// Alignement d'axes determine par l'assistant de calibration au sol (meme idiome).
+static void MagRemap_Save() {
+  prefs.begin("limvario", false);
+  prefs.putBytes("magremap", &g_magRemap, sizeof(g_magRemap));
+  prefs.end();
+}
+
 void Config_Save() {
   prefs.begin("limvario", false);
   prefs.putInt("bright", g_brightness);
@@ -603,6 +642,11 @@ static void Config_Load() {
     g_magCal = loadedCal;
     g_magCalValid = true;   // calibration precedente reutilisee tant qu'un virage ne la rafraichit pas
   }
+  MagRemapState loadedRemap;
+  if (prefs.getBytes("magremap", &loadedRemap, sizeof(loadedRemap)) == sizeof(loadedRemap)) {
+    g_magRemap = loadedRemap;
+    g_magRemapValid = true;
+  }
   for (int i = 0; i < 6; i++) {
     if (g_ibConfigClimb[i] >= IB_METRIC_MAX) g_ibConfigClimb[i] = IB_EMPTY;
     if (g_ibConfigCruise[i] >= IB_METRIC_MAX) g_ibConfigCruise[i] = IB_EMPTY;
@@ -620,7 +664,7 @@ enum { ST_SUB, ST_TOGGLE, ST_VALUE, ST_CHOICE, ST_INFO, ST_BACK };
 enum { SET_NONE, SET_HELPER, SET_BRIGHT, SET_VOLUME, SET_SINK, SET_LOGGER, SET_CONDOR, SET_RANGE,
        SET_ROT, SET_U_VERT, SET_U_ALT, SET_U_SPEED, SET_PITCH, SET_WAVE, SET_SPREAD,
        SET_VFILTER, SET_VAVG, SET_UPDATE, SET_CONDORSIM, SET_FWVER, SET_BUILD, SET_LINKVER, SET_CREATOR, SET_ALGO,
-       SET_APPCONNECT, SET_SHOW_QR, SET_RESET_CFG, SET_FACTORY_RESET,
+       SET_APPCONNECT, SET_SHOW_QR, SET_MAGCAL, SET_RESET_CFG, SET_FACTORY_RESET,
        SET_GLIDER_MODEL, SET_GLIDER_EMPTY_WT, SET_GLIDER_MAX_BAL, SET_GLIDER_V1, SET_GLIDER_SI1, SET_GLIDER_V2, SET_GLIDER_SI2, SET_GLIDER_V3, SET_GLIDER_SI3,
        SET_PROFILE_SELECT, SET_PROFILE_EDIT, SET_PROFILE_NEW, SET_PROFILE_SAVE, SET_PROFILE_DELETE };
 
@@ -640,6 +684,7 @@ static const SmItem DIT[]  = { {"Info boxes",ST_SUB,SM_INFOBOX},{"Units",ST_SUB,
 static const SmItem SYIT[] = {
   {"App connect",   ST_TOGGLE, SET_APPCONNECT},
   {"Show QR Code",  ST_INFO,   SET_SHOW_QR},
+  {"Calibrate compass", ST_INFO, SET_MAGCAL},
   {"Condor sim",    ST_TOGGLE, SET_CONDORSIM},
   {"Reset config",  ST_INFO,   SET_RESET_CFG},
   {"Factory reset", ST_INFO,   SET_FACTORY_RESET},
@@ -706,7 +751,7 @@ static const SmItem PRIT[] = {
 
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
-  {"System",SYIT,7},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
+  {"System",SYIT,8},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
   {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,19}
 };
 
@@ -1160,12 +1205,16 @@ static void InfoBox_CloseEdit() {
 
 static void Info_Show(const char* msg);   // forward decl: defined below (info popup), used here
 static void Info_Hide();
+static void MagCalWizard_Cancel();   // forward decl: defined later (near MagCal_Apply), used below
 static void SetupMenu_Open()  { g_setupOpen = true; g_menuState = MENU_CLOSED; g_menuDirty = true;
                                 g_smMenu = SM_ROOT; g_smSel = 0; g_smDepth = 0; g_smEdit = false; g_smDirty = true; }
 static void SetupMenu_Close() {
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); }
   if (g_infoOpen) Info_Hide();
   if (g_ibEditState != IBEDIT_NONE) { InfoBox_CloseEdit(); }
+  // Wizard (compass calibration): a long-press mid-flow must not leave it stuck running in
+  // the background -- same reasoning as the profile-name editor cleanup just below.
+  if (g_magCalWiz != MCW_NONE) MagCalWizard_Cancel();
   // Profile name editor (New/Save/Edit): without this, a long-press while typing
   // would close the whole setup, leaving the editor shown and unreachable forever
   // (2 July 2026 - no code could delete it any more once g_setupOpen=false).
@@ -1173,6 +1222,7 @@ static void SetupMenu_Close() {
   g_setupOpen = false; g_smEdit = false; g_smDirty = true; Config_Save();
 }
 static void SetupMenu_Back()  {
+  if (g_magCalWiz != MCW_NONE) { MagCalWizard_Cancel(); return; }
   if (g_infoOpen) { Info_Hide(); return; }
   if (g_smConfirm != -1) { g_smConfirm = -1; lv_obj_add_flag(s_confirmPanel, LV_OBJ_FLAG_HIDDEN); g_smDirty = true; return; }
   if (g_smMenu == SM_INFOBOX_METRIC || g_ibEditState == IBEDIT_CHOOSE_METRIC) {
@@ -1260,6 +1310,7 @@ static void Info_Tick() {
   if (g_infoOpen && millis() - g_infoShownMs > INFO_POPUP_MS) Info_Hide();
 }
 static void SetupMenu_Rotate(long d) {
+  if (g_magCalWiz != MCW_NONE) return;   // wizard is press-driven only (+ physical rotation for ROTATE)
   if (s_pnContainer) {
     if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
     if (s_pnCharEdit) {
@@ -1302,7 +1353,10 @@ static void SetupMenu_Rotate(long d) {
   g_smDirty = true;
 }
 static void QrScreen_Show();   // forward decl: defined later (QR CODE SCREEN section), used below
+static void MagCalWizard_Start();  // forward decl: defined later (near MagCal_Apply), used below
+static void MagCalWizard_OnPress();
 static void SetupMenu_Press() {
+  if (g_magCalWiz != MCW_NONE) { MagCalWizard_OnPress(); return; }
   if (s_pnContainer) {
     if (s_pnWarn) lv_obj_add_flag(s_pnWarn, LV_OBJ_FLAG_HIDDEN);
     if (s_pnCursor == 5) { ProfileName_Confirm(); return; }
@@ -1432,6 +1486,10 @@ static void SetupMenu_Press() {
         // toggles it OFF, unlike SmToggle(SET_APPCONNECT) above.
         if (!FlightLog_ServerActive()) { FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); }
         QrScreen_Show();
+        return;
+      }
+      if (it->arg == SET_MAGCAL) {
+        MagCalWizard_Start();
         return;
       }
       break;
@@ -2204,6 +2262,11 @@ static void Link_Poll()
         g_magX     = p->mag_x;
         g_magY     = p->mag_y;
         g_magZ     = p->mag_z;
+        g_utcSet   = (p->utc_hour != 0xFF);
+        if (g_utcSet) {
+          g_utcHour = p->utc_hour; g_utcMin = p->utc_min; g_utcSec = p->utc_sec;
+          g_utcDay  = p->utc_day;  g_utcMonth = p->utc_month; g_utcYear2 = p->utc_year2;
+        }
         // Reconnection: resync the command state (sink sound + Condor sim) to the calculator
         if (!g_linkOk) {
           Cmd_SendState();
@@ -2497,24 +2560,30 @@ static void WMM_Apply()
   lastMs = now;
 
   float decl;
-  if (g_gpsOk && WMM_GetDeclination(g_gpsLat, g_gpsLon, &decl)) {
+  // Date GPS reelle si disponible (plus precis que la date de build, cf WorldMagModel.h) --
+  // g_utcSet garde des valeurs figees a 0 tant qu'aucune trame RMC valide n'est arrivee, donc
+  // le sentinelle day=0 (utiliser la date de build) reste correct dans ce cas.
+  uint8_t day = g_utcSet ? g_utcDay : 0, month = g_utcSet ? g_utcMonth : 0, year2 = g_utcSet ? g_utcYear2 : 0;
+  if (g_gpsOk && WMM_GetDeclination(g_gpsLat, g_gpsLon, &decl, day, month, year2)) {
     g_wmmDecl  = decl;
     g_wmmValid = true;
   }
 }
 
-// Placeholder mounting constant: LIS3MDL (carte Calc) axes -> repere de l'AHRS (carte Ecran,
-// QMI8658). Les deux capteurs sont sur des PCB physiquement distincts -> leur relation d'axes
-// n'est PAS connue par construction (contrairement a IMU_FWD_SIGN, qui ne concerne qu'un seul
-// capteur deja monte sur la carte Ecran). Identite ci-dessous en attendant la verification au
-// banc (poser l'ensemble Calc+Ecran dans 2-3 orientations connues, comparer g_magX/Y/Z a
-// l'attitude AHRS + au champ terrestre local) -- une fois verifiee, seules ces 3 lignes
-// changent, rien d'autre dans ce fichier n'a besoin d'etre touche.
+// LIS3MDL (carte Calc) axes -> repere de l'AHRS (carte Ecran, QMI8658). Les deux capteurs
+// sont sur des PCB physiquement distincts -> leur relation d'axes n'est pas connue par
+// construction. Determinee par l'assistant de calibration au sol (g_magRemap, voir
+// MagCalWizard_*) au lieu d'etre fixee en dur -- identite tant qu'aucune calibration n'a
+// tourne (g_magRemapValid==false).
+static inline float MagRemap_Raw(float mx, float my, float mz, int8_t src)
+{
+  return src == 0 ? mx : (src == 1 ? my : mz);
+}
 static inline void MagRemap_ToBody(float mx, float my, float mz, float* bx, float* by, float* bz)
 {
-  *bx = mx;
-  *by = my;
-  *bz = mz;
+  *bx = g_magRemap.signX * MagRemap_Raw(mx, my, mz, g_magRemap.srcX);
+  *by = g_magRemap.signY * MagRemap_Raw(mx, my, mz, g_magRemap.srcY);
+  *bz = g_magRemap.signZ * MagRemap_Raw(mx, my, mz, g_magRemap.srcZ);
 }
 
 static void MagCal_Correct(float mxh, float myh, float* cx, float* cy)
@@ -2591,6 +2660,250 @@ static bool MagCal_FitEllipse(const float* xs, const float* ys, int n, MagCalSta
   return true;
 }
 
+// Formule standard de boussole tilt-compensee : fait tourner le champ (repere corps) dans
+// un repere "a plat", mxh/myh restant exprimes par rapport au cap COURANT (avant/droite).
+// Factorisee pour etre reutilisee par MagCal_Apply() (calibration en virage) ET par
+// l'assistant de calibration au sol (determination de l'alignement d'axes, meme formule
+// appliquee aux 3 postures capturees).
+static void MagCal_TiltCompensate(float bx, float by, float bz, float rollDeg, float pitchDeg,
+                                   float* mxh, float* myh)
+{
+  float rollRad  = rollDeg  * (PI / 180.0f);
+  float pitchRad = pitchDeg * (PI / 180.0f);
+  float cr = cosf(rollRad), sr = sinf(rollRad);
+  float cp = cosf(pitchRad), sp = sinf(pitchRad);
+  *mxh = bx*cp + by*sr*sp + bz*cr*sp;
+  *myh = by*cr - bz*sr;
+}
+
+// Cap non calibre (pas de correction hard/soft-iron) a partir d'un couple tilt-compense --
+// suffisant pour la comparaison relative de l'assistant de calibration au sol (cf plus bas),
+// PAS pour un cap de vol fiable (c'est le role de MagCal_Apply()/VarioFusion_SetMagHeading).
+static float MagCal_RawHeadingDeg(float mxh, float myh)
+{
+  // Signe/convention (mxh=avant, myh=droite) a verifier au banc en meme temps que le reste
+  // -- une seule ligne a inverser ici (mettre +myh) si le cap part a l'envers.
+  float headingDeg = atan2f(-myh, mxh) * (180.0f / PI);
+  if (headingDeg < 0.0f) headingDeg += 360.0f;
+  return headingDeg;
+}
+
+// ============================================================
+//  Assistant de calibration compas au sol (System > Calibrate compass)
+//
+//  Resout au meme endroit les deux points qui bloquaient la mise en confiance du
+//  magnetometre : l'alignement d'axes LIS3MDL<->IMU (inconnu par construction, deux
+//  cartes distinctes) ET la calibration hard/soft-iron (jusqu'ici seulement testable en
+//  vol, en spirale). Voir le plan de session pour le detail de la conception.
+//
+//  Etapes : HOLD_LEVEL -> HOLD_TILT1 -> HOLD_TILT2 (3 postures, angles quelconques -- le
+//  roll/pitch REEL mesure a chaque capture est utilise, pas une valeur supposee) -> calcul
+//  automatique de l'alignement d'axes (teste les 48 combinaisons signees, garde celle qui
+//  rend le cap coherent entre les 3 postures) -> ROTATE (tour complet a plat, mesure par
+//  integration gyro puisqu'il n'y a pas de mouvement GPS au sol) -> fit ellipse (code
+//  existant, inchange) -> sauvegarde.
+// ============================================================
+struct MagCalHold { float mx, my, mz, rollDeg, pitchDeg; };
+static MagCalHold s_mcwLevel, s_mcwTilt1, s_mcwTilt2;
+static float s_mcwSumMx, s_mcwSumMy, s_mcwSumMz, s_mcwSumRoll, s_mcwSumPitch;
+static int   s_mcwSumN = 0;
+static float s_mcwRotSx[400], s_mcwRotSy[400];
+static int   s_mcwRotN = 0;
+static float s_mcwRotAccum = 0.0f;
+
+static void MagCalWizard_ResetAccum()
+{
+  s_mcwSumMx = s_mcwSumMy = s_mcwSumMz = s_mcwSumRoll = s_mcwSumPitch = 0.0f;
+  s_mcwSumN = 0;
+}
+
+static void MagCalWizard_Start()
+{
+  if (!g_magOk) { Info_Show("No magnetometer"); return; }
+  g_magCalWiz = MCW_HOLD_LEVEL;
+  MagCalWizard_ResetAccum();
+  Info_Show("Pose a plat, appuie pour capturer");
+  Serial.println("[MAGCAL] Wizard start: HOLD_LEVEL");
+}
+
+static void MagCalWizard_Cancel()
+{
+  g_magCalWiz = MCW_NONE;
+  Info_Hide();
+  Serial.println("[MAGCAL] Wizard cancelled");
+}
+
+// Teste les 48 combinaisons signees (permutation des 3 axes bruts x signe) et garde celle
+// qui minimise l'ecart de cap (non calibre -- suffisant, voir "limite connue" du plan)
+// calcule aux 3 postures capturees. Les 3 postures partagent le meme cap reel (on n'a
+// tourne qu'en roll/pitch entre elles, jamais en lacet) -- une combinaison d'axes fausse
+// se trahit par un ecart de cap important entre postures a inclinaisons differentes.
+static void MagCalWizard_ComputeRemap()
+{
+  const MagCalHold* holds[3] = { &s_mcwLevel, &s_mcwTilt1, &s_mcwTilt2 };
+  MagRemapState best;
+  float bestScore = 1e9f;
+  for (int px = 0; px < 3; px++) {
+    for (int py = 0; py < 3; py++) {
+      if (py == px) continue;
+      for (int pz = 0; pz < 3; pz++) {
+        if (pz == px || pz == py) continue;
+        for (int sx = -1; sx <= 1; sx += 2) {
+          for (int sy = -1; sy <= 1; sy += 2) {
+            for (int sz = -1; sz <= 1; sz += 2) {
+              float headings[3];
+              for (int h = 0; h < 3; h++) {
+                const MagCalHold* H = holds[h];
+                float raw[3] = { H->mx, H->my, H->mz };
+                float bx = (float)sx * raw[px];
+                float by = (float)sy * raw[py];
+                float bz = (float)sz * raw[pz];
+                float mxh, myh;
+                MagCal_TiltCompensate(bx, by, bz, H->rollDeg, H->pitchDeg, &mxh, &myh);
+                headings[h] = MagCal_RawHeadingDeg(mxh, myh);
+              }
+              float score = 0.0f;
+              for (int a = 0; a < 3; a++) {
+                for (int b = a + 1; b < 3; b++) {
+                  float d = headings[a] - headings[b];
+                  while (d > 180.0f)  d -= 360.0f;
+                  while (d < -180.0f) d += 360.0f;
+                  score += fabsf(d);
+                }
+              }
+              if (score < bestScore) {
+                bestScore = score;
+                best.srcX = (int8_t)px; best.srcY = (int8_t)py; best.srcZ = (int8_t)pz;
+                best.signX = (int8_t)sx; best.signY = (int8_t)sy; best.signZ = (int8_t)sz;
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  g_magRemap = best;
+  g_magRemapValid = true;
+  MagRemap_Save();
+  Serial.printf("[MAGCAL] Remap: src=(%d,%d,%d) sign=(%d,%d,%d) score=%.1f deg\n",
+                best.srcX, best.srcY, best.srcZ, best.signX, best.signY, best.signZ, bestScore);
+}
+
+// Ecart (roll+pitch, degres) entre deux postures capturees -- garde-fou pour s'assurer que
+// le pilote a assez incline entre deux etapes (pas besoin d'angle precis, juste distinct).
+static float MagCalWizard_HoldSpread(const MagCalHold& a, const MagCalHold& b)
+{
+  return fabsf(a.pitchDeg - b.pitchDeg) + fabsf(a.rollDeg - b.rollDeg);
+}
+#define MAGCALWIZ_MIN_SPREAD_DEG 30.0f
+
+static void MagCalWizard_OnPress()
+{
+  if (g_magCalWiz == MCW_DONE) { g_magCalWiz = MCW_NONE; Info_Hide(); return; }
+  if (s_mcwSumN < 5) return;   // garde anti-double-clic (pas encore assez d'echantillons captes)
+
+  MagCalHold cur = {
+    s_mcwSumMx / s_mcwSumN, s_mcwSumMy / s_mcwSumN, s_mcwSumMz / s_mcwSumN,
+    s_mcwSumRoll / s_mcwSumN, s_mcwSumPitch / s_mcwSumN
+  };
+
+  if (g_magCalWiz == MCW_HOLD_LEVEL) {
+    s_mcwLevel = cur;
+    g_magCalWiz = MCW_HOLD_TILT1;
+    MagCalWizard_ResetAccum();
+    Info_Show("Incline nez vers le haut, appuie");
+    Serial.println("[MAGCAL] LEVEL captured -> HOLD_TILT1");
+    return;
+  }
+  if (g_magCalWiz == MCW_HOLD_TILT1) {
+    if (MagCalWizard_HoldSpread(cur, s_mcwLevel) < MAGCALWIZ_MIN_SPREAD_DEG) {
+      Info_Show("Incline plus, reessaie"); MagCalWizard_ResetAccum(); return;
+    }
+    s_mcwTilt1 = cur;
+    g_magCalWiz = MCW_HOLD_TILT2;
+    MagCalWizard_ResetAccum();
+    Info_Show("Incline aile droite basse, appuie");
+    Serial.println("[MAGCAL] TILT1 captured -> HOLD_TILT2");
+    return;
+  }
+  if (g_magCalWiz == MCW_HOLD_TILT2) {
+    if (MagCalWizard_HoldSpread(cur, s_mcwLevel) < MAGCALWIZ_MIN_SPREAD_DEG ||
+        MagCalWizard_HoldSpread(cur, s_mcwTilt1) < MAGCALWIZ_MIN_SPREAD_DEG) {
+      Info_Show("Incline plus, reessaie"); MagCalWizard_ResetAccum(); return;
+    }
+    s_mcwTilt2 = cur;
+    MagCalWizard_ComputeRemap();
+    g_magCalWiz = MCW_ROTATE;
+    s_mcwRotN = 0; s_mcwRotAccum = 0.0f;
+    Info_Show("Tourne un tour complet a plat");
+    Serial.println("[MAGCAL] TILT2 captured -> ROTATE");
+    return;
+  }
+}
+
+// Tourne a chaque iteration de boucle principale (voir call site pres de Info_Tick()) tant
+// que l'assistant est actif : accumule les echantillons des etapes HOLD_* (moyenne lissee,
+// lue par MagCalWizard_OnPress()) et, pendant ROTATE, integre le gyroscope (pas de GPS/
+// deplacement au sol pour mesurer la rotation comme le fait MagCal_Apply() en vol).
+static void MagCalWizard_Tick()
+{
+  if (g_magCalWiz == MCW_NONE || g_magCalWiz == MCW_DONE) return;
+
+  if (g_magCalWiz == MCW_HOLD_LEVEL || g_magCalWiz == MCW_HOLD_TILT1 || g_magCalWiz == MCW_HOLD_TILT2) {
+    float rollDeg, pitchDeg;
+    VarioFusion_GetRollPitch(&rollDeg, &pitchDeg);
+    s_mcwSumMx += g_magX; s_mcwSumMy += g_magY; s_mcwSumMz += g_magZ;   // brut, remap pas encore connu
+    s_mcwSumRoll += rollDeg; s_mcwSumPitch += pitchDeg;
+    s_mcwSumN++;
+    static uint32_t lastPrint = 0;
+    if (millis() - lastPrint > 300) {
+      lastPrint = millis();
+      Serial.printf("[MAGCAL] roll=%.1f pitch=%.1f raw=(%.1f,%.1f,%.1f)\n", rollDeg, pitchDeg, g_magX, g_magY, g_magZ);
+    }
+    return;
+  }
+
+  if (g_magCalWiz == MCW_ROTATE) {
+    static uint32_t lastUs = 0;
+    uint32_t nowUs = micros();
+    if (lastUs == 0) { lastUs = nowUs; return; }
+    float dt = (nowUs - lastUs) * 1e-6f;
+    lastUs = nowUs;
+    if (dt <= 0.0f || dt > 0.5f) return;
+
+    float bx, by, bz;
+    MagRemap_ToBody(g_magX, g_magY, g_magZ, &bx, &by, &bz);   // remap desormais determine
+    float rollDeg, pitchDeg;
+    VarioFusion_GetRollPitch(&rollDeg, &pitchDeg);
+    float mxh, myh;
+    MagCal_TiltCompensate(bx, by, bz, rollDeg, pitchDeg, &mxh, &myh);
+    if (s_mcwRotN < 400) { s_mcwRotSx[s_mcwRotN] = mxh; s_mcwRotSy[s_mcwRotN] = myh; s_mcwRotN++; }
+    s_mcwRotAccum += fabsf(Gyro.z) * dt;
+
+    static uint32_t lastPrint = 0;
+    if (millis() - lastPrint > 300) {
+      lastPrint = millis();
+      Serial.printf("[MAGCAL] rotate progress=%.0f/360 samples=%d\n", s_mcwRotAccum, s_mcwRotN);
+    }
+
+    if (s_mcwRotAccum >= 360.0f) {
+      MagCalState fit;
+      if (MagCal_FitEllipse(s_mcwRotSx, s_mcwRotSy, s_mcwRotN, &fit)) {
+        g_magCal = fit;
+        g_magCalValid = true;
+        MagCal_Save();
+        Info_Show("Calibration OK");
+        Serial.println("[MAGCAL] Fit OK, saved");
+      } else {
+        Info_Show("Calibration echouee, reessaie");
+        Serial.println("[MAGCAL] Fit FAILED (pas assez tourne ?)");
+      }
+      g_magCalWiz = MCW_DONE;
+    }
+    return;
+  }
+}
+
 // Tourne a chaque iteration de boucle (pas limite a 1 Hz comme Wind_Apply -- le fit
 // d'ellipse veut le plus d'echantillons possible par tour) : tilt-compense la lecture
 // magnetometre courante, alimente l'AHRS en cap corrige (VarioFusion_SetMagHeading), et --
@@ -2604,14 +2917,8 @@ static void MagCal_Apply()
 
   float rollDeg, pitchDeg;
   VarioFusion_GetRollPitch(&rollDeg, &pitchDeg);
-  float rollRad  = rollDeg  * (PI / 180.0f);
-  float pitchRad = pitchDeg * (PI / 180.0f);
-  float cr = cosf(rollRad), sr = sinf(rollRad);
-  float cp = cosf(pitchRad), sp = sinf(pitchRad);
-  // Formule standard de boussole tilt-compensee : fait tourner le champ (repere capteur)
-  // dans un repere "a plat", mxh/myh restant exprimes par rapport au cap COURANT (avant/droite).
-  float mxh = bx*cp + by*sr*sp + bz*cr*sp;
-  float myh = by*cr - bz*sr;
+  float mxh, myh;
+  MagCal_TiltCompensate(bx, by, bz, rollDeg, pitchDeg, &mxh, &myh);
 
   if (g_magCalValid) {
     float cx, cy;
@@ -2619,12 +2926,7 @@ static void MagCal_Apply()
     float mag = sqrtf(cx*cx + cy*cy);
     bool disturbed = fabsf(mag - 1.0f) > 0.20f;   // garde-fou anti-perturbation (auto-reference)
     if (!disturbed) {
-      // cap = angle entre le nez et le nord magnetique (sens horaire = Est positif). Signe/
-      // convention exacts (mxh=avant, myh=droite) a verifier au banc en meme temps que la
-      // Phase 0 -- une seule ligne a inverser ici (mettre +cy) si le cap part a l'envers.
-      float headingDeg = atan2f(-cy, cx) * (180.0f / PI);
-      if (headingDeg < 0.0f) headingDeg += 360.0f;
-      VarioFusion_SetMagHeading(headingDeg, true);
+      VarioFusion_SetMagHeading(MagCal_RawHeadingDeg(cx, cy), true);
     } else {
       VarioFusion_SetMagHeading(0.0f, false);
     }
@@ -3691,10 +3993,12 @@ void loop()
                  g_windAvgSpeed, g_windAvgDir,
                  g_energyMag, g_energyDir,
                  g_climbGain, g_stfSpeed,
-                 g_volume);
+                 g_volume,
+                 g_utcSet ? (long)g_utcHour * 10000 + (long)g_utcMin * 100 + (long)g_utcSec : -1L);
   FlightLog_ServerLoop();
   QrScreen_Tick();   // opens/closes the QR screen per the "App connect" state
   Info_Tick();       // auto-closes the info popup ("Profile saved" etc.) after a timeout
+  MagCalWizard_Tick(); // ground compass calibration wizard (no-op unless System > Calibrate compass is running)
 
   // --- Rapport perf (instrumentation LVGL_Driver) ---
   {

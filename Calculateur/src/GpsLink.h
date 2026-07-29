@@ -22,6 +22,12 @@ float    GpsLink_Lon(void);            // Longitude, decimal degrees +E/-W (NAN 
 int      GpsLink_NumSat(void);         // Satellites used in fix (from GGA, 0 if no GGA yet)
 int      GpsLink_FixQuality(void);     // GGA fix quality: 0=none, 1=GPS, 2=DGPS, 4=RTK fixed, 5=RTK float
 
+// UTC time/date from the last valid RMC sentence (for flight-log timestamping / IGC file
+// comparison). Returns false until a valid fix has carried parseable time/date -- outputs
+// left untouched in that case, do not assume 0 means midnight.
+bool     GpsLink_UtcTime(uint8_t* hour, uint8_t* min, uint8_t* sec,
+                         uint8_t* day, uint8_t* month, uint8_t* year2);
+
 // --- CONDOR Simulator Mode (Flight sim data stream via UDP "key=val") ---
 void     GpsLink_SetCondorEnabled(bool enabled); // Condor sim toggle (System menu): when false,
                                                   // the received Condor frames (serial/UDP) are

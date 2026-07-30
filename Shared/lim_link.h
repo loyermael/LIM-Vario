@@ -15,8 +15,15 @@
 
 #define LIM_SYNC0    0xA5
 #define LIM_SYNC1    0x5A
-#define LIM_VERSION  7           // v7 : added utc_hour/min/sec/day/month/year2 (RMC time/date,
+#define LIM_VERSION  8           // v7 : added utc_hour/min/sec/day/month/year2 (RMC time/date,
                                  // flight-log timestamping for IGC comparison)
+                                 // v8 : added volume (absolute 0..20, calculator's real sndVol).
+                                 // The display used to track its own g_volume via delta of the
+                                 // relayed enc2_count -- correct only as long as neither board
+                                 // ever restarts independently of the other, since a delta has no
+                                 // way to self-correct. Sending the calculator's actual value lets
+                                 // the display just mirror it (see lim_check() reject on version
+                                 // mismatch -- both sides are always rebuilt together here anyway).
 #define LIM_BAUD     115200      // UART link baud rate (reliable across both ESP32s)
 
 // Flags field bits (Calculator -> Display frame)
@@ -57,6 +64,9 @@ typedef struct {
   int32_t  enc2_count;  // cumulative encoder 2 step count
   uint8_t  enc1_btn;    // encoder 1 button state (1 = pressed)
   uint8_t  enc2_btn;    // encoder 2 button state (1 = pressed)
+  uint8_t  volume;      // 0..20, calculator's actual acoustic volume (sndVol) -- authoritative,
+                        // the display should mirror this directly rather than re-derive it from
+                        // enc2_count deltas (see LIM_VERSION v8 comment above)
   uint16_t crc;         // CRC16-CCITT across all preceding bytes
 } lim_packet_t;
 #pragma pack(pop)

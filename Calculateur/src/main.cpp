@@ -530,6 +530,7 @@ void loop() {
   pkt.enc2_count = (ENC2_REVERSE ? -1 : 1) * (int32_t)(enc2.getCount() / 4);
   pkt.enc1_btn   = (digitalRead(ENC1_SW) == LOW) ? 1 : 0;
   pkt.enc2_btn   = (digitalRead(ENC2_SW) == LOW) ? 1 : 0;
+  pkt.volume     = sndVol;   // authoritative -- display mirrors this instead of re-deriving it
   uint8_t flags = 0;
   if (bmpOk)    flags |= LIM_FLAG_BMP_OK;
   if (hasSpeed) flags |= LIM_FLAG_SPD_OK;

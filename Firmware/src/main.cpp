@@ -2245,12 +2245,12 @@ static void Link_HandleEncoders(const lim_packet_t* p)
   }
   enc1BtnLast = s_b1Debounced;
 
-  long d2 = (long)p->enc2_count - (long)enc2Last;
-  if (d2 != 0) {
-    enc2Last = p->enc2_count;
-    g_volume += (int)d2;
-    if (g_volume < 0)  g_volume = 0;
-    if (g_volume > 20) g_volume = 20;
+  // Mirror the calculator's actual volume directly (LIM_VERSION v8+) instead of re-deriving it
+  // from a delta of the relayed enc2_count: a delta has no way to self-correct if either board
+  // restarts independently of the other (calc reflashed alone, brief link loss, etc.) -- exactly
+  // what caused the display to show a different level than the real audio volume.
+  if ((int)p->volume != g_volume) {
+    g_volume = p->volume;
     g_volShownAt = millis();  // declenche l'affichage de l'arc
   }
 

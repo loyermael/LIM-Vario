@@ -681,10 +681,15 @@ static const SmItem RIT[]  = { {"Display",ST_SUB,SM_DISPLAY},{"Sound",ST_SUB,SM_
 static const SmItem VIT[]  = { {"Vario range",ST_CHOICE,SET_RANGE},{"Vario filter",ST_CHOICE,SET_VFILTER},{"Avg climb",ST_CHOICE,SET_VAVG},{"Back",ST_BACK,0} };
 static const SmItem SIT[]  = { {"Tone pitch",ST_VALUE,SET_PITCH},{"Waveform",ST_CHOICE,SET_WAVE},{"Tone spread",ST_VALUE,SET_SPREAD},{"Back",ST_BACK,0} };
 static const SmItem DIT[]  = { {"Info boxes",ST_SUB,SM_INFOBOX},{"Units",ST_SUB,SM_UNITS},{"Brightness",ST_VALUE,SET_BRIGHT},{"Screen rot.",ST_CHOICE,SET_ROT},{"Back",ST_BACK,0} };
+// ATTENTION : cette table doit rester alignee avec les objets EEZ de system_list et avec
+// le cablage s_syName[]/s_syVal[] (voir Menu_LvglSetup). EEZ ne fournit que 7 labels ici
+// (syname0,2,1,3_,4,5,6) -> 7 lignes max. Le static_assert pres de s_syName[] verrouille ca.
+// "Calibrate compass" (SET_MAGCAL) est retire en attendant sa ligne EEZ : ajoute en 0dadf81
+// sans label EEZ correspondant, il decalait tout l'affichage a partir de la 3e ligne et
+// faisait lire s_syName[7] hors bornes (page System corrompue).
 static const SmItem SYIT[] = {
   {"App connect",   ST_TOGGLE, SET_APPCONNECT},
   {"Show QR Code",  ST_INFO,   SET_SHOW_QR},
-  {"Calibrate compass", ST_INFO, SET_MAGCAL},
   {"Condor sim",    ST_TOGGLE, SET_CONDORSIM},
   {"Reset config",  ST_INFO,   SET_RESET_CFG},
   {"Factory reset", ST_INFO,   SET_FACTORY_RESET},
@@ -751,7 +756,7 @@ static const SmItem PRIT[] = {
 
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
-  {"System",SYIT,8},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
+  {"System",SYIT,7},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
   {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,19}
 };
 
@@ -772,6 +777,15 @@ static lv_obj_t* s_vName[4] = {0};   // sous-menu Vario : vname0..vname2 + Back 
 static lv_obj_t* s_vVal[4]  = {0};   // values vval0/vval1/vval2 ([3]=Back with no value)
 static lv_obj_t* s_syName[7] = {0};  // sous-menu System : syname0,2,1,3_,4,5,6 (Back)
 static lv_obj_t* s_syVal[7]  = {0};  // syval0 (App connect), syval1 (Condor, index 2), reste NULL
+// SetupMenu_RenderList() boucle sur SM[].n et indexe names[i]/vals[i] : si la table C grossit
+// sans que le tableau de cablage (et la ligne EEZ correspondante) suive, on lit hors bornes et
+// la page s'affiche decalee/corrompue -- exactement ce qui est arrive a System en 0dadf81, et
+// deja arrive plusieurs fois a IBIT_LIST. Ce garde-fou transforme l'oubli en erreur de compil.
+static_assert(sizeof(SYIT) / sizeof(SYIT[0]) <= sizeof(s_syName) / sizeof(s_syName[0]),
+              "SYIT a plus de lignes que d'objets EEZ cables dans s_syName[] "
+              "-> ajouter le label dans EEZ Studio (system_list) + sync_ui.py + le cabler ici");
+static_assert(sizeof(SYIT) / sizeof(SYIT[0]) <= sizeof(s_syVal) / sizeof(s_syVal[0]),
+              "SYIT a plus de lignes que d'entrees dans s_syVal[]");
 static lv_obj_t* s_abName[4] = {0};  // about_list: abname0,1,2,abname5(Back)
 static lv_obj_t* s_abVal[4]  = {0};  // abval0,1,2, NULL(Back)
 static lv_obj_t* s_glName[10] = {0}; // sous-menu Glider info

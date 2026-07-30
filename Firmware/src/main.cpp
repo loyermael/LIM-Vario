@@ -854,6 +854,17 @@ static lv_obj_t* s_confirmMsg   = NULL;
 static lv_obj_t* s_confirmYes   = NULL;
 static lv_obj_t* s_confirmNo    = NULL;
 
+// FlightLog_ServerToggle() starts/stops the WiFi AP, and internally calls Display_Restart()
+// + Lvgl_ForceFullRedraw() right after (see FlightLog.cpp) to resync the RGB panel, because
+// WiFi init/deinit briefly disables the PSRAM cache and corrupts the ongoing DMA scan-out.
+// Lvgl_ForceFullRedraw() calls lv_obj_invalidate() -- an LVGL call -- so it has the same
+// cross-core problem as QrScreen_Show() (see g_qrShowRequested): every menu path that calls
+// FlightLog_ServerToggle() runs in Driver_Loop (core 0) and must defer it to loop() (core 1),
+// where QrScreen_Tick() consumes this. Toggling the AP from core 0 while lv_timer_handler()
+// renders on core 1 is what still glitched the panel after the QR-only fix.
+enum : uint8_t { SRV_REQ_NONE, SRV_REQ_TOGGLE, SRV_REQ_ENSURE_ON };
+static volatile uint8_t g_serverActionRequested = SRV_REQ_NONE;
+
 // Sends the sound config (pitch/waveform/spread) to the calculator via lim_scfg_t.
 // Called on every Sound setting change + once at boot (link established).
 static void SoundCfg_Send() { LIM_SCFG_SEND(Serial1, g_tonePitch, g_waveform, g_toneSpread); }
@@ -872,7 +883,7 @@ static void SmToggle(uint8_t s) {
     case SET_LOGGER:     g_loggerEnable = !g_loggerEnable; break;
     case SET_UPDATE:     g_updateMode = !g_updateMode; break;
     case SET_CONDORSIM:  g_condorSim  = !g_condorSim;  Cmd_SendState(); break;   // enables/disables Condor handling on the calculator side
-    case SET_APPCONNECT: FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); break;  // AP WiFi + companion app + OTA
+    case SET_APPCONNECT: g_serverActionRequested = SRV_REQ_TOGGLE; break;  // AP WiFi + companion app + OTA (deferred to loop(): touches LVGL)
   }
   Config_Save();
 }
@@ -1390,6 +1401,9 @@ static void SetupMenu_Rotate(long d) {
   g_smDirty = true;
 }
 static void QrScreen_Show();   // forward decl: defined later (QR CODE SCREEN section), used below
+// Set from SetupMenu_Press() (Driver_Loop, core 0), consumed by QrScreen_Tick() (loop(), core 1) --
+// see the SET_SHOW_QR comment below for why this can't just call QrScreen_Show() directly.
+static volatile bool g_qrShowRequested = false;
 static void MagCalWizard_Start();  // forward decl: defined later (near MagCal_Apply), used below
 static void MagCalWizard_OnPress();
 static void SetupMenu_Press() {
@@ -1521,8 +1535,16 @@ static void SetupMenu_Press() {
         // Turns the AP on if it was off (so "Show QR Code" always works from a single
         // click, no need to flip "App connect" first) -- but only turns it ON, never
         // toggles it OFF, unlike SmToggle(SET_APPCONNECT) above.
-        if (!FlightLog_ServerActive()) { FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); }
-        QrScreen_Show();
+        g_serverActionRequested = SRV_REQ_ENSURE_ON;   // deferred to loop(): touches LVGL, see decl
+        // Do NOT call QrScreen_Show() here: this runs in Driver_Loop, pinned to core 0,
+        // while lv_timer_handler() runs from loop() on the other core, with no mutex
+        // between the two. QrScreen_Show() calls lv_qrcode_create() the first time,
+        // which allocates a new LVGL object and draws the whole QR bitmap -- racing that
+        // against a concurrent render is what caused the full-screen glitch. Every other
+        // ST_INFO handler here only toggles a flag/text on an already-built object, cheap
+        // enough that the race window never got hit; this one-time build is not, so it's
+        // deferred to QrScreen_Tick() (loop(), same core as lv_timer_handler()).
+        g_qrShowRequested = true;
         return;
       }
       if (it->arg == SET_MAGCAL) {
@@ -2059,6 +2081,17 @@ static void QrScreen_Close() {
 // left to scan). Manual close (long press ENC1, see menu_onLongPress) = just closes the
 // overlay, does NOT turn off WiFi.
 static void QrScreen_Tick() {
+  // Runs from loop() (core 1), the same core as lv_timer_handler() -- the only place it's
+  // safe to start/stop the WiFi AP (it resyncs+invalidates the panel, see g_serverActionRequested)
+  // or to build the QR overlay. See the SET_SHOW_QR comment above.
+  uint8_t srvReq = g_serverActionRequested;
+  if (srvReq != SRV_REQ_NONE) {
+    g_serverActionRequested = SRV_REQ_NONE;
+    if (srvReq == SRV_REQ_TOGGLE || !FlightLog_ServerActive()) FlightLog_ServerToggle();
+    g_updateMode = FlightLog_ServerActive();   // keeps the menu's "App connect" toggle consistent
+    Config_Save();                             // SmToggle() used to persist this itself
+  }
+  if (g_qrShowRequested) { g_qrShowRequested = false; QrScreen_Show(); }
   if (!FlightLog_ServerActive() && g_qrOpen) QrScreen_Close();
 }
 
@@ -2250,8 +2283,7 @@ static void Link_HandleEncoders(const lim_packet_t* p)
     if (g_qrOpen) {
       QrScreen_Close();   // modal QR overlay: close instead of re-toggling App connect
     } else {
-      FlightLog_ServerToggle();      // appui long enc2 = WiFi logs ON/OFF
-      g_updateMode = FlightLog_ServerActive();  // keeps the menu's "App connect" toggle consistent
+      g_serverActionRequested = SRV_REQ_TOGGLE;   // appui long enc2 = WiFi logs ON/OFF (deferred to loop(): touches LVGL)
     }
   }
   enc2BtnLast = s_b2Debounced;

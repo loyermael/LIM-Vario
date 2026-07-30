@@ -372,6 +372,14 @@ static void Info_Show(const char* msg);
 static void Info_Hide(void);
 static void Profile_ShowKeyboard(bool isNew);
 static void QrScreen_Show(void);
+static bool g_qrShowRequested;   /* defini plus bas (section ecran QR), utilise avant */
+/* Miroir du g_serverActionRequested de main.cpp : cote firmware, FlightLog_ServerToggle()
+ * fait un Display_Restart()+Lvgl_ForceFullRedraw() (le WiFi coupe le cache PSRAM et corrompt
+ * le scan-out DMA du panneau RGB), donc il doit etre deferre du core 0 vers loop()/core 1.
+ * Ici FlightLog_ServerToggle() n'est qu'une bascule locale sans effet ecran, mais on garde
+ * le meme flux pour que ce fichier reste un port fidele de la logique reelle. */
+enum { SRV_REQ_NONE, SRV_REQ_TOGGLE, SRV_REQ_ENSURE_ON };
+static int g_serverActionRequested = SRV_REQ_NONE;
 
 static bool ProfileName_IsDuplicate(const char* candidate) {
   for (int i = 0; i < 5; i++) {
@@ -547,7 +555,7 @@ static void SmToggle(uint8_t s) {
     case SET_LOGGER:     g_loggerEnable = !g_loggerEnable; break;
     case SET_UPDATE:     g_updateMode = !g_updateMode; break;
     case SET_CONDORSIM:  g_condorSim  = !g_condorSim;  break;
-    case SET_APPCONNECT: DbgLog("SmToggle SET_APPCONNECT AVANT"); FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); DbgLog("SmToggle SET_APPCONNECT APRES"); break;
+    case SET_APPCONNECT: g_serverActionRequested = SRV_REQ_TOGGLE; break;   /* deferre a QrScreen_Tick, voir decl */
   }
   Config_Save();
 }
@@ -869,8 +877,8 @@ static void SetupMenu_Press(void) {
       if (it->arg == SET_PROFILE_SAVE) { Profile_Save(g_profileIdx); Info_Show("Profile saved"); return; }
       if (it->arg == SET_RESET_CFG || it->arg == SET_FACTORY_RESET || it->arg == SET_PROFILE_DELETE) { Confirm_Show((int8_t)it->arg); return; }
       if (it->arg == SET_SHOW_QR) {
-        if (!FlightLog_ServerActive()) { FlightLog_ServerToggle(); g_updateMode = FlightLog_ServerActive(); }
-        QrScreen_Show();
+        g_serverActionRequested = SRV_REQ_ENSURE_ON;   /* deferre a QrScreen_Tick, voir decl */
+        g_qrShowRequested = true;   /* voir QrScreen_Tick -- miroir du flux main.cpp */
         return;
       }
       break;
@@ -1943,8 +1951,16 @@ static void SimMenu_FeedDemoTelemetry(double t) {
 /* ---- Ecran QR code (partage WiFi "App connect"), port fidele de main.cpp ---- */
 static lv_obj_t* s_qrCode = NULL;
 static bool      g_qrOpen = false;
+/* Miroir du g_qrShowRequested de main.cpp : la ou le vrai firmware doit deferrer
+ * QrScreen_Show() du core 0 (Driver_Loop) vers le core 1 (loop()) pour ne pas construire
+ * le QR (lv_qrcode_create, alloc + dessin du bitmap) en concurrence avec lv_timer_handler(),
+ * le simulateur est mono-thread donc la race n'existe pas ici -- on garde quand meme le
+ * meme flag/flux pour que ce fichier reste un port fidele de la logique reelle. */
+static bool g_qrShowRequested = false;
 
-/* DEBUG TEMPORAIRE : trace la sequence app connect / QR pour diagnostiquer le bug signale. */
+/* Toujours utilisee par SmToggle(SET_APPCONNECT), Labels_Apply et OnLongPress2 (bug
+ * STF/Mode/Wind, deja corrige par ailleurs mais logs pas encore retires) -- ne pas
+ * supprimer sans nettoyer ces appels-la aussi. */
 static void DbgLog(const char* msg) {
   FILE* f = fopen("C:\\PioBuild\\LM-Vario-Sim\\qr_debug.log", "a");
   if (f) { fprintf(f, "[%lu] %s (serverOn=%d qrOpen=%d)\n", (unsigned long)GetTickCount64(), msg, (int)FlightLog_ServerActive(), (int)g_qrOpen); fclose(f); }
@@ -1969,23 +1985,27 @@ static void QrScreen_Show(void) {
     lv_obj_move_foreground(objects.qr_panel);
   }
   g_qrOpen = true;
-  DbgLog("QrScreen_Show APRES set g_qrOpen=true");
 }
 static void QrScreen_Close(void) {
-  DbgLog("QrScreen_Close AVANT");
   if (objects.qr_panel) lv_obj_add_flag(objects.qr_panel, LV_OBJ_FLAG_HIDDEN);
   g_qrOpen = false;
-  DbgLog("QrScreen_Close APRES");
 }
 /* App connect ON/OFF ne montre plus le QR tout seul (voir main.cpp) -- ferme juste
  * l'overlay si le serveur tombe pendant qu'il est affiche. */
 static void QrScreen_Tick(void) {
-  if (!FlightLog_ServerActive() && g_qrOpen) { DbgLog("QrScreen_Tick: server off -> force Close"); QrScreen_Close(); }
+  if (g_serverActionRequested != SRV_REQ_NONE) {
+    int srvReq = g_serverActionRequested;
+    g_serverActionRequested = SRV_REQ_NONE;
+    if (srvReq == SRV_REQ_TOGGLE || !FlightLog_ServerActive()) FlightLog_ServerToggle();
+    g_updateMode = FlightLog_ServerActive();
+    Config_Save();   /* SmToggle() le faisait lui-meme avant */
+  }
+  if (g_qrShowRequested) { g_qrShowRequested = false; QrScreen_Show(); }
+  if (!FlightLog_ServerActive() && g_qrOpen) QrScreen_Close();
 }
 
 static void menu_onButton(void) {
-  DbgLog("menu_onButton ENTREE");
-  if (g_qrOpen) { QrScreen_Close(); DbgLog("menu_onButton: ferme via g_qrOpen"); return; }   /* overlay QR modal : n'importe quel clic la ferme (comme "Back") */
+  if (g_qrOpen) { QrScreen_Close(); return; }   /* overlay QR modal : n'importe quel clic la ferme (comme "Back") */
   g_menuDirty = true;
   if (g_setupOpen) { SetupMenu_Press(); return; }
   switch (g_menuState) {
@@ -2087,9 +2107,6 @@ void SimMenu_OnRotate2(long delta) {
 }
 /* ENC2 long = bascule serveur WiFi logs (App connect) */
 void SimMenu_OnLongPress2(void) {
-  DbgLog("OnLongPress2 ENTREE");
   if (g_qrOpen) { QrScreen_Close(); return; }   /* overlay QR modal : ferme au lieu de re-basculer App connect */
-  FlightLog_ServerToggle();
-  g_updateMode = FlightLog_ServerActive();
-  DbgLog("OnLongPress2 toggle direct");
+  g_serverActionRequested = SRV_REQ_TOGGLE;     /* deferre a QrScreen_Tick, voir decl */
 }

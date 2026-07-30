@@ -1139,8 +1139,31 @@ static void SmValTxt(uint8_t s, char* b, int n) {
     case SET_UPDATE:    snprintf(b, n, g_updateMode ? "ON" : "OFF"); break;
     case SET_CONDORSIM: snprintf(b, n, g_condorSim  ? "ON" : "OFF"); break;
     case SET_APPCONNECT:snprintf(b, n, FlightLog_ServerActive() ? "ON" : "OFF"); break;
-    case SET_FWVER:     snprintf(b, n, "v%s", LIM_FW_SCREEN); break;
-    case SET_BUILD:     snprintf(b, n, "%s %s", __DATE__, __TIME__); break;
+    // LIM_FW_VERSION = "<base>+<hash git>[-dirty]" (Shared/version_gen.py) -> on ne garde que
+    // la base pour "Version" (le hash de build deborderait/n'apporte rien d'utile au pilote).
+    case SET_FWVER: {
+      const char* s = LIM_FW_SCREEN; const char* p = strchr(s, '+');
+      if (p) snprintf(b, n, "v%.*s", (int)(p - s), s);
+      else   snprintf(b, n, "v%s", s);
+      break;
+    }
+    // "Build" = hash git court (7 car., deja produit tel quel par version_gen.py), + un
+    // "*" (pas "-dirty", trop long) si l'arbre avait des modifs non committees au moment du
+    // build. abval1 est en montserrat_28 aligne a droite depuis x=300 (largeur EEZ pensee
+    // pour "29/06/26", 8 car.) -> on reste dans le meme budget. Ligne date separee plus tard.
+    case SET_BUILD: {
+      const char* p = strchr(LIM_FW_SCREEN, '+');
+      if (p) {
+        p++;
+        const char* dirty = strstr(p, "-dirty");
+        int hashLen = dirty ? (int)(dirty - p) : (int)strlen(p);
+        if (hashLen > 7) hashLen = 7;
+        snprintf(b, n, "%.*s%s", hashLen, p, dirty ? "*" : "");
+      } else {
+        snprintf(b, n, "%s", __DATE__);
+      }
+      break;
+    }
     case SET_LINKVER:   snprintf(b, n, "v%d", LIM_VERSION); break;
     case SET_CREATOR:   snprintf(b, n, "Mael Loyer"); break;
     case SET_ALGO:      snprintf(b, n, "Kalman & Mahony"); break;
@@ -1804,7 +1827,7 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
   IBDBG("[IB] RenderList: container shown, filling items\n");
 
   int n = m->n;
-  char v[20];
+  char v[24];   // "0dadf81-dirty", "Kalman & Mahony"... : 20 tronquait les valeurs About
   for (int i = 0; i < n; i++) {
     if (!names[i]) continue;
     lv_obj_clear_flag(names[i], LV_OBJ_FLAG_HIDDEN);
@@ -1815,7 +1838,10 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
       lv_color_hex(it->type == ST_BACK ? 0xff0000 : 0xffffff),
       LV_PART_MAIN | LV_STATE_DEFAULT);
     if (vals[i]) {
-      if (g_smMenu != SM_ABOUT && (it->type == ST_VALUE || it->type == ST_CHOICE || it->type == ST_TOGGLE || it->type == ST_INFO)) {
+      // SM_ABOUT etait exclu ici : ses 3 valeurs gardaient donc les textes statiques figes
+      // dessines dans EEZ ("v0.8.0", "29/06/26", "v3") au lieu des vraies. SmValTxt sait les
+      // calculer -> on ne l'exclut plus.
+      if (it->type == ST_VALUE || it->type == ST_CHOICE || it->type == ST_TOGGLE || it->type == ST_INFO) {
         SmValTxt(it->arg, v, sizeof(v));
         lv_label_set_text(vals[i], v);
       }

@@ -1054,7 +1054,7 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
   lv_obj_clear_flag(container, LV_OBJ_FLAG_HIDDEN);
 
   int n = m->n;
-  char v[20];
+  char v[24];
   for (int i = 0; i < n; i++) {
     if (!names[i]) continue;
     lv_obj_clear_flag(names[i], LV_OBJ_FLAG_HIDDEN);
@@ -1062,7 +1062,9 @@ static void SetupMenu_RenderList(lv_obj_t* container, lv_obj_t** names, lv_obj_t
     const SmItem* it = &m->items[i];
     lv_obj_set_style_text_color(names[i], lv_color_hex(it->type == ST_BACK ? 0xff0000 : 0xffffff), LV_PART_MAIN | LV_STATE_DEFAULT);
     if (vals[i]) {
-      if (g_smMenu != SM_ABOUT && (it->type == ST_VALUE || it->type == ST_CHOICE || it->type == ST_TOGGLE || it->type == ST_INFO)) {
+      /* SM_ABOUT etait exclu ici -- ses valeurs gardaient les textes statiques EEZ
+       * ("v0.8.0" etc.) au lieu des vraies (miroir du fix main.cpp). */
+      if (it->type == ST_VALUE || it->type == ST_CHOICE || it->type == ST_TOGGLE || it->type == ST_INFO) {
         SmValTxt(it->arg, v, sizeof(v));
         lv_label_set_text(vals[i], v);
       }

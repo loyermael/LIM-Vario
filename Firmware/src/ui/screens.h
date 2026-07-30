@@ -70,9 +70,9 @@ typedef struct _objects_t {
     lv_obj_t *item1;
     lv_obj_t *item2;
     lv_obj_t *item3;
+    lv_obj_t *item4;
     lv_obj_t *item5;
     lv_obj_t *item6;
-    lv_obj_t *item4;
     lv_obj_t *display_list;
     lv_obj_t *dname0;
     lv_obj_t *dname1;
@@ -119,6 +119,7 @@ typedef struct _objects_t {
     lv_obj_t *syname4;
     lv_obj_t *syname5;
     lv_obj_t *syname6;
+    lv_obj_t *syname7;
     lv_obj_t *about_list;
     lv_obj_t *abname0;
     lv_obj_t *abval0;
@@ -180,6 +181,11 @@ typedef struct _objects_t {
     lv_obj_t *ibname16;
     lv_obj_t *ibname17;
     lv_obj_t *ibname18;
+    lv_obj_t *magcal_panel;
+    lv_obj_t *magcal_instr;
+    lv_obj_t *magcal_roll;
+    lv_obj_t *magcal_pitch;
+    lv_obj_t *magcal_progress;
     lv_obj_t *infobox_editor_container;
     lv_obj_t *ib_frame_0;
     lv_obj_t *ib_val_0;

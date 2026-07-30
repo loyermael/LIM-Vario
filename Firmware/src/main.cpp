@@ -95,6 +95,15 @@ struct MagCalState {
 static MagCalState g_magCal;
 static bool  g_magCalValid = false; // true des qu'une calibration hard/soft-iron a ete acceptee
 
+// Decalage de rotation absolu du cap magnetique (deg), determine par recalage GPS+vent
+// (methode LARUS, reimplementee independamment) : le fit d'ellipse ci-dessus corrige la
+// FORME de la reponse magnetometre (hard/soft-iron) mais ne peut pas determiner son
+// orientation absolue -- une ellipse tournee de N degres se corrige tout aussi bien qu'une
+// ellipse non tournee. Ce decalage comble ce trou en comparant le cap magnetique a un cap
+// independant deduit de la trajectoire GPS et du vent estime (aucune dependance au
+// magnetometre), cf MagCal_Apply().
+static float g_magHeadingOffsetDeg = 0.0f;
+
 // Alignement d'axes LIS3MDL (carte Calc) -> repere IMU (carte Ecran), determine par
 // l'assistant de calibration au sol (MagCalWizard_*). srcX/Y/Z = index (0=X,1=Y,2=Z) de la
 // lecture brute a utiliser pour cet axe corps, signX/Y/Z = signe a appliquer. Identite par
@@ -555,6 +564,7 @@ static Preferences prefs;
 static void MagCal_Save() {
   prefs.begin("limvario", false);
   prefs.putBytes("magcal", &g_magCal, sizeof(g_magCal));
+  prefs.putFloat("magrotoff", g_magHeadingOffsetDeg);
   prefs.end();
 }
 
@@ -641,6 +651,7 @@ static void Config_Load() {
   if (prefs.getBytes("magcal", &loadedCal, sizeof(loadedCal)) == sizeof(loadedCal)) {
     g_magCal = loadedCal;
     g_magCalValid = true;   // calibration precedente reutilisee tant qu'un virage ne la rafraichit pas
+    g_magHeadingOffsetDeg = prefs.getFloat("magrotoff", 0.0f);
   }
   MagRemapState loadedRemap;
   if (prefs.getBytes("magremap", &loadedRemap, sizeof(loadedRemap)) == sizeof(loadedRemap)) {
@@ -682,12 +693,12 @@ static const SmItem VIT[]  = { {"Vario range",ST_CHOICE,SET_RANGE},{"Vario filte
 static const SmItem SIT[]  = { {"Tone pitch",ST_VALUE,SET_PITCH},{"Waveform",ST_CHOICE,SET_WAVE},{"Tone spread",ST_VALUE,SET_SPREAD},{"Back",ST_BACK,0} };
 static const SmItem DIT[]  = { {"Info boxes",ST_SUB,SM_INFOBOX},{"Units",ST_SUB,SM_UNITS},{"Brightness",ST_VALUE,SET_BRIGHT},{"Screen rot.",ST_CHOICE,SET_ROT},{"Back",ST_BACK,0} };
 // ATTENTION : cette table doit rester alignee avec les objets EEZ de system_list et avec
-// le cablage s_syName[]/s_syVal[] (voir Menu_LvglSetup). EEZ ne fournit que 7 labels ici
-// (syname0,2,1,3_,4,5,6) -> 7 lignes max. Le static_assert pres de s_syName[] verrouille ca.
-// "Calibrate compass" (SET_MAGCAL) est retire en attendant sa ligne EEZ : ajoute en 0dadf81
-// sans label EEZ correspondant, il decalait tout l'affichage a partir de la 3e ligne et
-// faisait lire s_syName[7] hors bornes (page System corrompue).
+// le cablage s_syName[]/s_syVal[] (voir Menu_LvglSetup). EEZ fournit 8 labels ici
+// (syname7,0,2,1,3_,4,5,6) -> 8 lignes max. Le static_assert pres de s_syName[] verrouille ca.
+// "Calibration" (SET_MAGCAL) : re-ajoute une fois la ligne EEZ (syname7, y=53, au-dessus des
+// autres) disponible -- premiere tentative retiree en 0dadf81 faute de label EEZ correspondant.
 static const SmItem SYIT[] = {
+  {"Calibration",   ST_INFO,   SET_MAGCAL},
   {"App connect",   ST_TOGGLE, SET_APPCONNECT},
   {"Show QR Code",  ST_INFO,   SET_SHOW_QR},
   {"Condor sim",    ST_TOGGLE, SET_CONDORSIM},
@@ -756,7 +767,7 @@ static const SmItem PRIT[] = {
 
 static const SmMenu SM[SM_N] = {
   {"Settings",RIT,7},{"Vario",VIT,4},{"Sound",SIT,4},{"Display",DIT,5},
-  {"System",SYIT,7},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
+  {"System",SYIT,8},{"Info Boxes",IBIT_MODE,3},{"Units",UIT,4},{"About",ABT,4},
   {"Glider infos",GLIT,10},{"Profile",PRIT,6},{"Select Metric",IBIT_LIST,19}
 };
 
@@ -775,8 +786,8 @@ static lv_obj_t* s_sName[4] = {0};   // sous-menu Sound : sname0..sname2 + Back 
 static lv_obj_t* s_sVal[4]  = {0};   // values sval0..sval2 ([3]=Back with no value)
 static lv_obj_t* s_vName[4] = {0};   // sous-menu Vario : vname0..vname2 + Back (vname3)
 static lv_obj_t* s_vVal[4]  = {0};   // values vval0/vval1/vval2 ([3]=Back with no value)
-static lv_obj_t* s_syName[7] = {0};  // sous-menu System : syname0,2,1,3_,4,5,6 (Back)
-static lv_obj_t* s_syVal[7]  = {0};  // syval0 (App connect), syval1 (Condor, index 2), reste NULL
+static lv_obj_t* s_syName[8] = {0};  // sous-menu System : syname7,0,2,1,3_,4,5,6 (Back)
+static lv_obj_t* s_syVal[8]  = {0};  // syval0 (App connect, index 1), syval1 (Condor, index 3), reste NULL
 // SetupMenu_RenderList() boucle sur SM[].n et indexe names[i]/vals[i] : si la table C grossit
 // sans que le tableau de cablage (et la ligne EEZ correspondante) suive, on lit hors bornes et
 // la page s'affiche decalee/corrompue -- exactement ce qui est arrive a System en 0dadf81, et
@@ -1625,13 +1636,14 @@ static void SetupMenu_Init()
   lv_obj_add_flag(objects.vario_list, LV_OBJ_FLAG_HIDDEN);
 
   // --- System submenu (system_list hand-built in EEZ) ---
-  // Ordre EEZ exact (position Y croissante): syname0=App connect, syname2=Show QR Code,
-  // syname1=Condor sim, syname3_=Reset config, syname4=Factory reset, syname5=About, syname6=Back
-  s_syName[0] = objects.syname0;  s_syName[1] = objects.syname2;
-  s_syName[2] = objects.syname1;  s_syName[3] = objects.syname3_;
-  s_syName[4] = objects.syname4;  s_syName[5] = objects.syname5;
-  s_syName[6] = objects.syname6;  // Back (rouge dans EEZ)
-  s_syVal[0] = objects.syval0; s_syVal[2] = objects.syval1;
+  // Ordre EEZ exact (position Y croissante): syname7=Calibration, syname0=App connect,
+  // syname2=Show QR Code, syname1=Condor sim, syname3_=Reset config, syname4=Factory reset,
+  // syname5=About, syname6=Back
+  s_syName[0] = objects.syname7;  s_syName[1] = objects.syname0;
+  s_syName[2] = objects.syname2;  s_syName[3] = objects.syname1;
+  s_syName[4] = objects.syname3_; s_syName[5] = objects.syname4;
+  s_syName[6] = objects.syname5;  s_syName[7] = objects.syname6;  // Back (rouge dans EEZ)
+  s_syVal[1] = objects.syval0; s_syVal[3] = objects.syval1;
   lv_obj_set_scrollbar_mode(objects.system_list, LV_SCROLLBAR_MODE_OFF);
   lv_obj_add_flag(objects.system_list, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
   lv_obj_add_flag(objects.system_list, LV_OBJ_FLAG_HIDDEN);
@@ -1770,6 +1782,7 @@ static void SetupMenu_HideLists()
   if (objects.infobox_list)             lv_obj_add_flag(objects.infobox_list, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_mode_list)        lv_obj_add_flag(objects.infobox_mode_list, LV_OBJ_FLAG_HIDDEN);
   if (objects.infobox_editor_container) lv_obj_add_flag(objects.infobox_editor_container, LV_OBJ_FLAG_HIDDEN);
+  if (objects.magcal_panel)             lv_obj_add_flag(objects.magcal_panel, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void SetupMenu_ApplyItemZoom(lv_obj_t* obj, lv_coord_t cy, lv_coord_t frame_cy) {
@@ -2796,19 +2809,32 @@ static void MagCalWizard_ResetAccum()
   s_mcwSumN = 0;
 }
 
+// Ecrit l'instruction courante dans le panneau EEZ magcal_panel/magcal_instr (remplace les
+// Info_Show() de la version texte-generique -- meme role, vrai widget dedie).
+static void MagCalWizard_ShowInstr(const char* msg)
+{
+  if (objects.magcal_instr) lv_label_set_text(objects.magcal_instr, msg);
+}
+
 static void MagCalWizard_Start()
 {
   if (!g_magOk) { Info_Show("No magnetometer"); return; }
   g_magCalWiz = MCW_HOLD_LEVEL;
   MagCalWizard_ResetAccum();
-  Info_Show("Pose a plat, appuie pour capturer");
+  // magcal_panel est un enfant de setup_panel au meme niveau que system_list (etc.) --
+  // meme mecanique d'affichage qu'un sous-menu (SetupMenu_HideLists() cache les autres),
+  // setup_panel lui-meme reste visible (deja le cas, on est dans System > Calibration).
+  SetupMenu_HideLists();
+  if (objects.magcal_panel) lv_obj_clear_flag(objects.magcal_panel, LV_OBJ_FLAG_HIDDEN);
+  MagCalWizard_ShowInstr("Lay flat, press to capture");
   Serial.println("[MAGCAL] Wizard start: HOLD_LEVEL");
 }
 
 static void MagCalWizard_Cancel()
 {
   g_magCalWiz = MCW_NONE;
-  Info_Hide();
+  if (objects.magcal_panel) lv_obj_add_flag(objects.magcal_panel, LV_OBJ_FLAG_HIDDEN);
+  g_smDirty = true;   // restaure system_list (g_smMenu est reste sur SM_SYSTEM pendant le wizard)
   Serial.println("[MAGCAL] Wizard cancelled");
 }
 
@@ -2878,7 +2904,12 @@ static float MagCalWizard_HoldSpread(const MagCalHold& a, const MagCalHold& b)
 
 static void MagCalWizard_OnPress()
 {
-  if (g_magCalWiz == MCW_DONE) { g_magCalWiz = MCW_NONE; Info_Hide(); return; }
+  if (g_magCalWiz == MCW_DONE) {
+    g_magCalWiz = MCW_NONE;
+    if (objects.magcal_panel) lv_obj_add_flag(objects.magcal_panel, LV_OBJ_FLAG_HIDDEN);
+    g_smDirty = true;   // restaure system_list
+    return;
+  }
   if (s_mcwSumN < 5) return;   // garde anti-double-clic (pas encore assez d'echantillons captes)
 
   MagCalHold cur = {
@@ -2890,31 +2921,31 @@ static void MagCalWizard_OnPress()
     s_mcwLevel = cur;
     g_magCalWiz = MCW_HOLD_TILT1;
     MagCalWizard_ResetAccum();
-    Info_Show("Incline nez vers le haut, appuie");
+    MagCalWizard_ShowInstr("Tilt nose up, press");
     Serial.println("[MAGCAL] LEVEL captured -> HOLD_TILT1");
     return;
   }
   if (g_magCalWiz == MCW_HOLD_TILT1) {
     if (MagCalWizard_HoldSpread(cur, s_mcwLevel) < MAGCALWIZ_MIN_SPREAD_DEG) {
-      Info_Show("Incline plus, reessaie"); MagCalWizard_ResetAccum(); return;
+      MagCalWizard_ShowInstr("Tilt more, retry"); MagCalWizard_ResetAccum(); return;
     }
     s_mcwTilt1 = cur;
     g_magCalWiz = MCW_HOLD_TILT2;
     MagCalWizard_ResetAccum();
-    Info_Show("Incline aile droite basse, appuie");
+    MagCalWizard_ShowInstr("Tilt right wing down, press");
     Serial.println("[MAGCAL] TILT1 captured -> HOLD_TILT2");
     return;
   }
   if (g_magCalWiz == MCW_HOLD_TILT2) {
     if (MagCalWizard_HoldSpread(cur, s_mcwLevel) < MAGCALWIZ_MIN_SPREAD_DEG ||
         MagCalWizard_HoldSpread(cur, s_mcwTilt1) < MAGCALWIZ_MIN_SPREAD_DEG) {
-      Info_Show("Incline plus, reessaie"); MagCalWizard_ResetAccum(); return;
+      MagCalWizard_ShowInstr("Tilt more, retry"); MagCalWizard_ResetAccum(); return;
     }
     s_mcwTilt2 = cur;
     MagCalWizard_ComputeRemap();
     g_magCalWiz = MCW_ROTATE;
     s_mcwRotN = 0; s_mcwRotAccum = 0.0f;
-    Info_Show("Tourne un tour complet a plat");
+    MagCalWizard_ShowInstr("Rotate one full turn, flat");
     Serial.println("[MAGCAL] TILT2 captured -> ROTATE");
     return;
   }
@@ -2934,6 +2965,8 @@ static void MagCalWizard_Tick()
     s_mcwSumMx += g_magX; s_mcwSumMy += g_magY; s_mcwSumMz += g_magZ;   // brut, remap pas encore connu
     s_mcwSumRoll += rollDeg; s_mcwSumPitch += pitchDeg;
     s_mcwSumN++;
+    if (objects.magcal_roll)  { char b[24]; snprintf(b, sizeof(b), "Roll: %.1f\xC2\xB0",  rollDeg);  lv_label_set_text(objects.magcal_roll,  b); }
+    if (objects.magcal_pitch) { char b[24]; snprintf(b, sizeof(b), "Pitch: %.1f\xC2\xB0", pitchDeg); lv_label_set_text(objects.magcal_pitch, b); }
     static uint32_t lastPrint = 0;
     if (millis() - lastPrint > 300) {
       lastPrint = millis();
@@ -2959,6 +2992,11 @@ static void MagCalWizard_Tick()
     if (s_mcwRotN < 400) { s_mcwRotSx[s_mcwRotN] = mxh; s_mcwRotSy[s_mcwRotN] = myh; s_mcwRotN++; }
     s_mcwRotAccum += fabsf(Gyro.z) * dt;
 
+    if (objects.magcal_progress) {
+      char b[24];
+      snprintf(b, sizeof(b), "%.0f\xC2\xB0/360\xC2\xB0", s_mcwRotAccum > 360.0f ? 360.0f : s_mcwRotAccum);
+      lv_label_set_text(objects.magcal_progress, b);
+    }
     static uint32_t lastPrint = 0;
     if (millis() - lastPrint > 300) {
       lastPrint = millis();
@@ -2971,10 +3009,10 @@ static void MagCalWizard_Tick()
         g_magCal = fit;
         g_magCalValid = true;
         MagCal_Save();
-        Info_Show("Calibration OK");
+        MagCalWizard_ShowInstr("Calibration OK");
         Serial.println("[MAGCAL] Fit OK, saved");
       } else {
-        Info_Show("Calibration echouee, reessaie");
+        MagCalWizard_ShowInstr("Calibration failed, retry");
         Serial.println("[MAGCAL] Fit FAILED (pas assez tourne ?)");
       }
       g_magCalWiz = MCW_DONE;
@@ -3005,7 +3043,10 @@ static void MagCal_Apply()
     float mag = sqrtf(cx*cx + cy*cy);
     bool disturbed = fabsf(mag - 1.0f) > 0.20f;   // garde-fou anti-perturbation (auto-reference)
     if (!disturbed) {
-      VarioFusion_SetMagHeading(MagCal_RawHeadingDeg(cx, cy), true);
+      float hdg = MagCal_RawHeadingDeg(cx, cy) + g_magHeadingOffsetDeg;
+      if (hdg >= 360.0f) hdg -= 360.0f;
+      if (hdg < 0.0f)    hdg += 360.0f;
+      VarioFusion_SetMagHeading(hdg, true);
     } else {
       VarioFusion_SetMagHeading(0.0f, false);
     }
@@ -3018,9 +3059,13 @@ static void MagCal_Apply()
   static int   nSamp     = 0;
   static float prevTrack = NAN;
   static float rotAccum  = 0.0f;
+  // ---- Recalage absolu du cap (rotation), en parallele : voir g_magHeadingOffsetDeg ----
+  static float sumSin = 0.0f, sumCos = 0.0f;
+  static int   nRef    = 0;
 
   if (!g_circling || !g_gpsOk || isnan(g_gpsTrack)) {
     nSamp = 0; prevTrack = NAN; rotAccum = 0.0f;
+    sumSin = 0.0f; sumCos = 0.0f; nRef = 0;
     return;
   }
   if (isnan(prevTrack)) { prevTrack = g_gpsTrack; return; }
@@ -3032,9 +3077,33 @@ static void MagCal_Apply()
 
   if (nSamp < 400) { sx[nSamp] = mxh; sy[nSamp] = myh; nSamp++; }
 
+  // Cap independant GPS+vent (methode LARUS) : cap_air = vecteur_sol - vecteur_vent, sans
+  // aucune dependance au magnetometre. N'utilise QUE le vent deja etabli par Wind_Apply()
+  // sur un tour precedent (bootstrap : le tout premier virage de la session ne peut pas
+  // encore contribuer ici, mais alimente quand meme le fit d'ellipse ci-dessus).
+  if (g_magCalValid && !isnan(g_windAvgSpeed) && !isnan(g_windAvgDir) && g_gndSpeed > 0.1f) {
+    float windRad   = g_windAvgDir * (PI / 180.0f);
+    float windEast  = -g_windAvgSpeed * sinf(windRad);   // vent "vers" = oppose du vent "de" (meteo)
+    float windNorth = -g_windAvgSpeed * cosf(windRad);
+    float gndRad    = g_gpsTrack * (PI / 180.0f);
+    float airEast   = g_gndSpeed * sinf(gndRad) - windEast;
+    float airNorth  = g_gndSpeed * cosf(gndRad) - windNorth;
+    if (airEast*airEast + airNorth*airNorth > 1.0f) {   // garde-fou vitesse air min. ~1 m/s
+      float gpsHeadingDeg = atan2f(airEast, airNorth) * (180.0f / PI);
+      if (gpsHeadingDeg < 0.0f) gpsHeadingDeg += 360.0f;
+      float cx, cy;
+      MagCal_Correct(mxh, myh, &cx, &cy);
+      float magHeadingDeg = MagCal_RawHeadingDeg(cx, cy);
+      float diffRad = (gpsHeadingDeg - magHeadingDeg) * (PI / 180.0f);
+      sumSin += sinf(diffRad); sumCos += cosf(diffRad);
+      nRef++;
+    }
+  }
+
   if (rotAccum >= 360.0f) {
     MagCalState fit;
-    if (MagCal_FitEllipse(sx, sy, nSamp, &fit)) {
+    bool fitOk = MagCal_FitEllipse(sx, sy, nSamp, &fit);
+    if (fitOk) {
       const float BLEND = 0.3f;   // lissage : un virage bruite ne doit pas ecraser la calib
       if (!g_magCalValid) {
         g_magCal = fit;          // seed direct au premier fit accepte
@@ -3047,9 +3116,21 @@ static void MagCal_Apply()
         g_magCal.m11 += (fit.m11 - g_magCal.m11) * BLEND;
       }
       g_magCalValid = true;
-      MagCal_Save();
     }
-    nSamp = 0; rotAccum = 0.0f;
+    bool rotOk = false;
+    if (nRef > 10) {   // assez d'echantillons GPS+vent sur ce tour pour affiner le decalage
+      const float BLEND_ROT = 0.3f;
+      float meanDiffDeg = atan2f(sumSin, sumCos) * (180.0f / PI);
+      float delta = meanDiffDeg - g_magHeadingOffsetDeg;
+      while (delta > 180.0f)  delta -= 360.0f;
+      while (delta < -180.0f) delta += 360.0f;
+      g_magHeadingOffsetDeg += delta * BLEND_ROT;
+      while (g_magHeadingOffsetDeg > 180.0f)  g_magHeadingOffsetDeg -= 360.0f;
+      while (g_magHeadingOffsetDeg < -180.0f) g_magHeadingOffsetDeg += 360.0f;
+      rotOk = true;
+    }
+    if (fitOk || rotOk) MagCal_Save();   // ne persiste que si quelque chose a reellement ete mis a jour
+    nSamp = 0; rotAccum = 0.0f; sumSin = 0.0f; sumCos = 0.0f; nRef = 0;
   }
 }
 

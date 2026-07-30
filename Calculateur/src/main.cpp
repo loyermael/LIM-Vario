@@ -49,7 +49,7 @@
 
 // BENCH SIMULATION: synthetic thermal spiral generator for testing without Condor.
 // 0 = off. CONDOR UDP telemetry overrides this automatically upon receiving packets.
-#define SIM_VARIO 0
+#define SIM_VARIO 1
 
 // ---- Sensor Handlers ----
 Adafruit_BMP3XX bmp;

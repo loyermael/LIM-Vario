@@ -1544,7 +1544,9 @@ static void Comp_Apply(void) {
     vF += (v - vF) * (dt / (0.5f + dt));
     float dVdt = (vF - vPrev) / dt;
     vPrev = vF;
-    term = (vF / 9.80665f) * dVdt;
+    /* GPS noise floor at rest reads as ~0.5-1 m/s of "ground speed" -- differentiating
+     * that alone crackled the vario tone (miroir du fix main.cpp/Comp_Apply). */
+    { const float V_GATE = 3.0f; term = (vF > V_GATE) ? (vF / 9.80665f) * dVdt : 0.0f; }
     if (term > 5.0f) term = 5.0f; if (term < -5.0f) term = -5.0f;
   } else { vF = vPrev = 0.0f; }
   g_varioComp = base + term;

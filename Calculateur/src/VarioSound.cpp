@@ -30,19 +30,30 @@
 #define DMA_FRAME_NUM    256                     // frames per DMA buffer (5.8 ms @ 44.1k)
 #define DMA_DESC_NUM     8                       // 8 * 5.8 ms = 46 ms audio buffer depth
 
-static uint8_t  s_sinTab[256];
+// Full 16-bit samples (-32000..+32000, a hair under int16 range for multiply headroom).
+// Was uint8_t (256 amplitude levels total, ~48 dB of resolution) -> that quantization
+// floor is what made the tone sound gritty/lo-fi ("8-bit"-sounding) rather than clean,
+// especially at low volume where the already-coarse steps get scaled down even further.
+// Phase resolution (256 table entries/cycle) was never the issue -- it's plenty even at
+// 1500 Hz (~29 samples/cycle @ 44.1 kHz) since consecutive samples don't visit adjacent
+// entries; only the AMPLITUDE axis needed the extra bits.
+static int16_t  s_sinTab[256];
 static uint32_t s_phase  = 0;  // Modified exclusively from the dedicated audio task
 
-// Populates wave lookup table (read by audio task). Centered at 128 mid-scale.
-//  0 = Sine, 1 = Square, 2 = Triangle.
+// Populates wave lookup table (read by audio task). 0 = Sine, 1 = Square, 2 = Triangle.
 static void fill_wave_table(uint8_t w)
 {
     for (int i = 0; i < 256; i++) {
-        uint8_t val;
+        int16_t val;
         switch (w) {
-            case 1:  val = (i < 128) ? 255 : 0; break;                                  // Square
-            case 2:  val = (i < 128) ? (uint8_t)(i * 2) : (uint8_t)(254 - (i - 128) * 2); break;  // Triangle
-            default: val = (uint8_t)(128.0f + 127.0f * sinf(2.0f * M_PI * i / 256.0f)); break;    // Sine
+            case 1:  val = (i < 128) ? 32000 : -32000; break;                              // Square
+            case 2: {                                                                      // Triangle
+                float x = (float)i / 256.0f;                                                // 0..1
+                float t = (x < 0.5f) ? (4.0f * x - 1.0f) : (3.0f - 4.0f * x);               // -1..+1..-1
+                val = (int16_t)(t * 32000.0f);
+                break;
+            }
+            default: val = (int16_t)(32000.0f * sinf(2.0f * M_PI * i / 256.0f)); break;    // Sine
         }
         s_sinTab[i] = val;
     }
@@ -63,6 +74,8 @@ static i2s_chan_handle_t s_txHandle = NULL;
 static void audio_task_fn(void*)
 {
     static int16_t buf[DMA_FRAME_NUM * 2];   // interleaved L/R, 16-bit
+    static float   curAmp  = 0.0f;           // smoothed amplitude envelope (0..127), see below
+    static uint32_t lastInc = 0;             // last active phase increment, held during release
     bool prevTone = false;
     size_t written;
 
@@ -72,21 +85,61 @@ static void audio_task_fn(void*)
         uint8_t  amp = s_amp;
         bool     hasTone = (inc != 0) && (amp != 0);
 
-        // Clean attack: restart phase at zero-crossing on silence -> tone edge
-        if (hasTone && !prevTone) s_phase = 0;
+        // Clean attack: restart phase at zero-crossing, but ONLY when coming from genuine
+        // silence (curAmp already settled near 0). If the beep state re-triggers fast (vz
+        // dithering right around the beep threshold re-fires SILENCE->BEEP_ON repeatedly
+        // before the previous envelope finished decaying), the waveform is still actively
+        // playing at an audible level -- forcing the phase to 0 there is itself an abrupt
+        // jump in the sample value while curAmp isn't near zero to mask it, i.e. exactly the
+        // kind of click this was meant to prevent. Only reset when there's nothing playing
+        // to interrupt; otherwise let the (fast, ~3 ms) envelope carry the transition and
+        // leave the phase running continuously.
+        if (hasTone && !prevTone && curAmp < 0.5f) s_phase = 0;
         prevTone = hasTone;
+        if (hasTone) lastInc = inc;
+
+        float target = hasTone ? (float)amp : 0.0f;
+        uint32_t useInc = hasTone ? inc : lastInc;   // hold last freq through fade-out (see below)
 
         // ---- Generate waveform buffer (mono duplicated on L and R) ----
-        if (hasTone) {
+        if (useInc != 0) {
+            // Amplitude envelope, updated ONCE PER SAMPLE (not once per DMA buffer -- a
+            // block-rate update was itself introducing "zipper noise", audible as its own
+            // small roughness). tau = 1/(44100*ENV_ALPHA) ~= 2.3 ms, ~95% risen in ~7 ms:
+            // a middle ground between an earlier value that was too slow (~5.7 ms tau,
+            // ~17-28 ms to reach full level -- swallowed most of each beep whenever the
+            // state machine re-triggered faster than that, close to silent) and one that
+            // was too fast to fully mask the click (~1.1 ms tau, ~3 ms). useInc keeps the
+            // oscillator running at the last active frequency through the fade-out --
+            // inc=0 there would freeze the waveform at a fixed sample (DC), turning the
+            // "fade" into its own click instead of a real decay.
+            const float ENV_ALPHA = 0.01f;
             for (int i = 0; i < DMA_FRAME_NUM; i++) {
-                s_phase += inc;
-                int32_t s = (int32_t)s_sinTab[s_phase >> 24] - 128;   // -128..+127
-                int16_t v = (int16_t)(s * (int32_t)amp * 2);          // fits int16 (max ~32512)
+                curAmp += (target - curAmp) * ENV_ALPHA;
+                s_phase += useInc;
+                // s_phase>>24 alone (256 discrete positions/cycle, no interpolation) is what
+                // still made the tone sound "steppy"/digital even with a 16-bit-amplitude
+                // table: between two lookups the output snaps instead of gliding, so the
+                // waveform itself is still a 256-point staircase. Interpolate linearly between
+                // the two neighbouring table entries using the next 8 phase bits as the
+                // fractional position -- this is what actually removes the audible "steps".
+                uint32_t idx  = s_phase >> 24;
+                uint32_t frac = (s_phase >> 16) & 0xFF;
+                int32_t  s0 = s_sinTab[idx];
+                int32_t  s1 = s_sinTab[(idx + 1) & 0xFF];
+                int32_t  s  = s0 + (((s1 - s0) * (int32_t)frac) >> 8);
+                int16_t  v  = (int16_t)((float)s * (curAmp * (1.0f / 127.0f)));
                 buf[2 * i]     = v;   // Left
                 buf[2 * i + 1] = v;   // Right (MAX98357A averages L+R when SD floats)
             }
+            // No forced snap-to-zero here anymore: it used to force curAmp to exactly 0.0f
+            // once per BUFFER (outside the per-sample loop above), which is itself a small
+            // step discontinuity right at that buffer boundary -- the one-pole decay below
+            // 0.5/127 (~0.4% of full scale) is already inaudible, so let it settle there
+            // asymptotically instead of forcing a boundary jump to fix it.
         } else {
             memset(buf, 0, sizeof(buf));
+            curAmp = 0.0f;
         }
 
         // ---- Write to DMA engine (blocks until buffer space frees) ----

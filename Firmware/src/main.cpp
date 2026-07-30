@@ -2512,7 +2512,14 @@ static void Comp_Apply()
     vF += (v - vF) * (dt / (0.5f + dt));
     float dVdt = (vF - vPrev) / dt;
     vPrev = vF;
-    term  = (vF / 9.80665f) * dVdt;
+    // GPS position noise alone reads as ~0.5-1 m/s of "ground speed" at a dead stop
+    // (seen at rest: gps=0.7..1.4 m/s) -- differentiating that noise floor is what made
+    // the vario tone (this term feeds g_varioComp, streamed to the speaker as the master
+    // vario) crackle on the ground/bench. There's no real energy exchange to compensate
+    // near-zero groundspeed anyway, so gate the term off below it; only engages once
+    // actually rolling/moving, same as it always effectively did in flight.
+    const float V_GATE = 3.0f;   // m/s -- below typical GPS speed noise, above walking pace
+    term = (vF > V_GATE) ? (vF / 9.80665f) * dVdt : 0.0f;
   } else {
     VarioFusion_SetAirspeed(0.0f, false);
     vF = vPrev = 0.0f;
